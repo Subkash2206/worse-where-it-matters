@@ -10,11 +10,11 @@ checkpoints/*.pt
 checkpoints/*.ckpt
 
 # Results and Outputs
-results/*.csv
-results/*.json
-results/figures/*.png
-results/figures/*.pdf
-results/figures/*.jpg
+# results/*.csv
+# results/*.json
+# results/figures/*.png
+# results/figures/*.pdf
+# results/figures/*.jpg
 
 # Python Environment
 __pycache__/
