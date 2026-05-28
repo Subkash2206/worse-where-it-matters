@@ -32,8 +32,8 @@ def main():
         res_dict = {
             'baseline_dice': dice_score(base_prob, mask_np),
             'tta_dice': dice_score(tta_prob, mask_np),
-            'baseline_bf1': boundary_f1(base_prob, mask_np),
-            'tta_bf1': boundary_f1(tta_prob, mask_np),
+            'baseline_bf1': boundary_f1(base_prob, mask_np, thickness=1),
+            'tta_bf1': boundary_f1(tta_prob, mask_np, thickness=1),
             'baseline_hd95': hausdorff_95(base_prob, mask_np),
             'tta_hd95': hausdorff_95(tta_prob, mask_np),
         }
