@@ -82,21 +82,35 @@ def seed_from_config(config: "Config", key: str = "seed") -> int:
     return seed_everything(int(config.require(key)), deterministic=bool(config.get("deterministic", True)))
 
 
-def make_worker_init_fn(seed: int, *, deterministic: bool = True):
+class _WorkerInit:
+    """Picklable DataLoader ``worker_init_fn``.
+
+    A closure would work on Linux (fork) but not on Windows/macOS, where workers are
+    started with ``spawn`` and every argument must be picklable — a local function
+    raises ``AttributeError: Can't get local object 'make_worker_init_fn.<locals>._init'``.
+    """
+
+    def __init__(self, seed: int, deterministic: bool = True) -> None:
+        self.seed = int(seed)
+        self.deterministic = bool(deterministic)
+
+    def __call__(self, worker_id: int) -> None:  # pragma: no cover - runs in subprocess
+        worker_seed = (self.seed + int(worker_id)) % _UINT32_MAX
+        np.random.seed(worker_seed)
+        random.seed(worker_seed)
+        torch.manual_seed(worker_seed)
+        torch.use_deterministic_algorithms(self.deterministic, warn_only=True)
+
+
+def make_worker_init_fn(seed: int, *, deterministic: bool = True) -> _WorkerInit:
     """Return a DataLoader ``worker_init_fn`` that seeds each worker.
 
     DataLoader workers reseed NumPy/PyTorch on start-up; without this hook the
     augmented samples differ between runs even when the main process is seeded.
+    The returned object is picklable, so it also works with the ``spawn`` start
+    method (Windows).
     """
-
-    def _init(worker_id: int) -> None:  # pragma: no cover - runs in subprocess
-        worker_seed = (int(seed) + worker_id) % _UINT32_MAX
-        np.random.seed(worker_seed)
-        random.seed(worker_seed)
-        torch.manual_seed(worker_seed)
-        torch.use_deterministic_algorithms(deterministic, warn_only=True)
-
-    return _init
+    return _WorkerInit(seed, deterministic)
 
 
 def environment_info(device: torch.device | None = None) -> dict[str, Any]:

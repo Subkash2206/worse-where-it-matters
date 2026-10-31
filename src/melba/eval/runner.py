@@ -95,6 +95,20 @@ def _spacing_text(spacing: Sequence[float]) -> str:
     return ",".join(f"{float(value):g}" for value in spacing)
 
 
+def _resolve_checkpoint(config: Config, fold: int) -> Path | None:
+    """Resolve ``model.checkpoint``, substituting the fold when the path asks for it.
+
+    ``scripts/train.py`` writes one checkpoint per fold
+    (``.../<experiment>/fold{k}/best.pt``), so the config can declare
+    ``model.checkpoint: checkpoints/<experiment>/fold{fold}/best.pt`` and the same
+    config is valid for every fold without manual overrides.
+    """
+    setting = config.get("model.checkpoint")
+    if not setting:
+        return None
+    return config.resolve(str(setting).format(fold=int(fold)))
+
+
 def _synchronize(device: torch.device) -> None:
     """Block until all pending CUDA kernels of this device are finished."""
     if device.type == "cuda":
@@ -209,8 +223,7 @@ def run_evaluation(
     injected_model = model is not None
     if model is None:
         model = build_model(config)
-    checkpoint_setting = config.get("model.checkpoint")
-    resolved_checkpoint: Path | None = config.resolve(checkpoint_setting) if checkpoint_setting else None
+    resolved_checkpoint: Path | None = _resolve_checkpoint(config, resolved_fold)
     checkpoint_meta: dict[str, Any] = {}
     if not injected_model:
         if resolved_checkpoint is None:

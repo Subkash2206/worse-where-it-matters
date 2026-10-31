@@ -241,6 +241,18 @@ def test_dataset_detects_leakage_in_split_file(eval_config, tmp_path) -> None:
         build_dataset(config, "test")
 
 
+def test_checkpoint_path_is_fold_aware(eval_config) -> None:
+    from melba.eval.runner import _resolve_checkpoint
+
+    config = eval_config.with_overrides(
+        {"model.checkpoint": "checkpoints/exp/fold{fold}/best.pt"}
+    )
+    path = _resolve_checkpoint(config, 3)
+    assert path.name == "best.pt"
+    assert "fold3" in path.parts
+    assert _resolve_checkpoint(eval_config.with_overrides({"model.checkpoint": None}), 0) is None
+
+
 def test_metrics_are_computed_on_the_native_grid(eval_config, tmp_path) -> None:
     """The toy frames are 40x56 but the network input is 64x64."""
     config = eval_config.with_overrides({"metrics.empty_policy": "penalize"})

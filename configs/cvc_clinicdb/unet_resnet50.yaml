@@ -58,7 +58,7 @@ model:
   encoder_weights: imagenet
   in_channels: 3
   num_classes: 1
-  checkpoint: checkpoints/cvc_clinicdb_unet_resnet50/best.pt
+  checkpoint: checkpoints/cvc_clinicdb_unet_resnet50/fold{fold}/best.pt
   selection_split: val
 
 training:

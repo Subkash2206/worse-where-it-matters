@@ -56,6 +56,34 @@ def test_cublas_workspace_config_is_set_for_determinism() -> None:
     assert os.environ["CUBLAS_WORKSPACE_CONFIG"] == ":4096:8"
 
 
+def test_worker_init_fn_is_picklable_and_seeds() -> None:
+    """Windows/macOS workers use spawn, so the hook must survive pickling."""
+    import pickle
+    import random
+
+    import numpy as np
+
+    from melba.utils.reproducibility import make_worker_init_fn
+
+    hook = make_worker_init_fn(123, deterministic=True)
+    restored = pickle.loads(pickle.dumps(hook))
+
+    random.seed(0)
+    np.random.seed(0)
+    restored(4)
+    first = (random.random(), float(np.random.rand()))
+    random.seed(0)
+    np.random.seed(0)
+    restored(4)
+    second = (random.random(), float(np.random.rand()))
+    assert first == second
+
+    random.seed(0)
+    np.random.seed(0)
+    restored(5)
+    assert (random.random(), float(np.random.rand())) != first
+
+
 def test_get_device_auto_and_cpu() -> None:
     assert get_device("cpu").type == "cpu"
     auto = get_device("auto")
