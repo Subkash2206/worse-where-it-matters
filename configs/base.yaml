@@ -1,0 +1,115 @@
+# -----------------------------------------------------------------------------
+# MELBA shared defaults.
+#
+# Every experiment config in configs/ inherits from this file through
+# `defaults: [../base.yaml]`.  Nothing in this repository is allowed to hardcode
+# a path, a seed or a hyper-parameter in Python: all of it lives here.
+#
+# Paths are resolved relative to `paths.root`.  `paths.root` itself is resolved
+# relative to the directory of the config file that declares it (so ".." points
+# at the repository root).
+# -----------------------------------------------------------------------------
+
+seed: 1234                 # global seed for python, numpy, torch, cudnn
+deterministic: true        # cudnn.deterministic + torch.use_deterministic_algorithms
+device: auto               # auto | cpu | cuda | cuda:0 ...
+
+paths:
+  # `auto` anchors the root at the closest ancestor directory containing
+  # pyproject.toml (i.e. the repository root), independent of how deeply nested
+  # the experiment config is. An explicit absolute path also works.
+  root: auto
+  checkpoints: checkpoints
+  results: results
+  splits: data/splits
+  logs: logs
+
+runtime:
+  num_workers: 4
+  pin_memory: true
+  progress: true
+
+model:
+  architecture: smp_unet        # smp_unet | monai_segresnet
+  encoder: resnet50
+  encoder_weights: imagenet     # imagenet | null (random init)
+  in_channels: 3
+  num_classes: 1
+  dropout_p: 0.0                # encoder-feature dropout during training only
+  checkpoint: null              # filled by the experiment config
+  selection_split: val          # split used for checkpoint selection
+
+inference:
+  batch_size: 1                 # per-case inference keeps memory bounded
+  amp: true                     # mixed precision on CUDA only
+  activation: sigmoid           # sigmoid (binary) | softmax (multi-class)
+  threshold: 0.5
+
+metrics:
+  names:
+    # ground-truth metrics
+    - dice
+    - jaccard
+    - precision
+    - recall
+    - hd
+    - hd95                     # MONAI convention: max(p95(pred->gt), p95(gt->pred))
+    - hd95_pooled              # medpy-style variant, reference only
+    - assd
+    - boundary_f1
+    # per-view uncertainty / reliability descriptors
+    - entropy_mean
+    - variance_mean
+    - entropy_mean_roi
+    - variance_mean_roi
+    - view_disagreement
+    - per_view_dice_mean
+    - per_view_dice_std
+  hd_percentile: 95.0
+  connectivity: 1               # surface connectivity (1 = 6-neighbourhood in 3D)
+  boundary_tolerance_mm: 2.0
+  empty_policy: nan             # nan (default) | penalize (sensitivity analysis only)
+
+evaluation:
+  split: test
+  fold: 0                       # used with dataset.split.output_pattern
+  output_dir: results/${experiment.name}/evaluation
+  write_summary: true
+  allow_selection_split: false  # refuses to report the split used for selection
+  warmup_runs: 3                # warm-up passes before timing each case/method
+  uncertainty_boundary_band_px: 3
+  save_probability_maps: false  # float16 mean/variance maps (mean.npy, var.npy)
+  probability_map_dir: null     # defaults to <output_dir>/maps
+
+training:
+  epochs: 100
+  batch_size: 8
+  learning_rate: 1.0e-4
+  weight_decay: 0.0
+  scheduler: cosine             # cosine | none
+  loss: bce_dice                # bce | bce_dice
+  amp: true
+  monitor: val_loss             # val_loss | val_dice
+  early_stopping_patience: 25
+  train_aug: geometric_d4       # geometric_d4 | flips_only | intensity | none
+  data_fraction: 1.0            # seeded fraction of *training videos* (data scaling)
+  checkpoint_dir: checkpoints/${experiment.name}
+  checkpoint_name: best.pt
+
+tta:
+  aggregator: mean              # mean | median | max
+
+stats:
+  unit: group                   # group (video/patient) | case
+  primary_test: wilcoxon        # wilcoxon | sign
+  secondary_test: t_test_rel    # reported as secondary only
+  alternative: two-sided
+  n_bootstrap: 10000
+  ci: 0.95
+  correction: holm              # holm | none
+  bootstrap_seed: 0
+  output_dir: results/${experiment.name}/stats
+
+experiment:
+  name: unnamed
+  description: ""

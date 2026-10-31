@@ -1,7 +1,19 @@
-torch
-monai
-numpy
-pandas
-scipy
-matplotlib
-tqdm
+# Pinned environment for the MELBA journal extension (validated on Python 3.13.7).
+# Install with:  python -m pip install -r requirements.txt
+# torch is pinned without a local CUDA tag so the default wheel for the target
+# platform is resolved; install the matching CUDA build for your driver.
+torch==2.6.0
+numpy==2.4.1
+scipy==1.17.0
+pandas==3.0.1
+PyYAML==6.0.2
+Pillow==12.1.0
+opencv-python-headless==4.13.0.92
+monai==1.5.2
+segmentation-models-pytorch==0.5.0
+nibabel==5.4.2
+matplotlib==3.10.8
+tqdm==4.67.3
+
+# Test tooling
+pytest==9.0.2

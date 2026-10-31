@@ -1,0 +1,126 @@
+# -----------------------------------------------------------------------------
+# CVC-ClinicDB, 2D UNet (segmentation_models_pytorch, ResNet-50 encoder).
+#
+# Splits are made at VIDEO level, never at frame level: neighbouring frames of
+# the same colonoscopy video are near duplicates and must stay in one split.
+# The frame -> video mapping is data, not code: point `group_map_file` at a CSV
+# with the columns `case_id,group_id` (see docs/splits.md).
+# -----------------------------------------------------------------------------
+defaults:
+  - ../base.yaml
+
+experiment:
+  name: cvc_clinicdb_unet_resnet50
+  description: "2D polyp segmentation with geometry-aware TTA"
+
+dataset:
+  name: cvc_clinicdb
+  root: cvc_clinicdb
+  images_dir: cvc_clinicdb/original
+  masks_dir: cvc_clinicdb/ground_truth
+  image_extension: .tif
+  image_size: [352, 352]          # [H, W]; metrics are computed at native size
+  in_channels: 3
+  num_classes: 1
+  mask_threshold: 127             # ground-truth binarisation threshold
+  # CVC-ClinicDB ships no calibrated pixel spacing, so distances are reported in
+  # pixels.  Set this to real millimetres if a calibrated subset is used.
+  spacing_mm: [1.0, 1.0]
+
+  split:
+    strategy: group_map           # group_map | contiguous_blocks (proxy only)
+    group_map_file: data/splits/cvc_clinicdb_frame_groups.csv
+    frame_column: case_id
+    group_column: group_id
+    # Official CVC-ClinicDB frame -> sequence table (Bernal et al., 2015): the last
+    # frame of each of the 29 sequences.  Sequence k covers (previous end + 1)..end_k,
+    # starting at frame 1.  scripts/make_cvc_mapping.py expands it into the mapping
+    # CSV, so the grouping is reproducible and auditable.
+    sequence_end_frames:
+      [25, 50, 67, 78, 103, 126, 151, 177, 199, 205, 227, 252, 277, 297, 317,
+       342, 363, 383, 408, 428, 447, 466, 478, 503, 528, 546, 571, 591, 612]
+    n_folds: 5                    # every video is a test unit exactly once
+    fold: 0
+    output_pattern: data/splits/cvc_clinicdb_fold{fold}.csv
+    block_size: 20                # only used by `contiguous_blocks`
+    seed: 2024
+
+  augmentation:                   # probabilities only; the group comes from training.train_aug
+    hflip_p: 0.5
+    vflip_p: 0.5
+    rot90_p: 0.5
+    brightness: 0.15
+    contrast: 0.15
+
+model:
+  architecture: smp_unet
+  encoder: resnet50
+  encoder_weights: imagenet
+  in_channels: 3
+  num_classes: 1
+  checkpoint: checkpoints/cvc_clinicdb_unet_resnet50/best.pt
+  selection_split: val
+
+training:
+  epochs: 100
+  batch_size: 8
+  learning_rate: 1.0e-4
+  monitor: val_dice
+
+# Geometric TTA view subsets: exactly 1, 2, 4 and 8 views of the dihedral group D4
+# of the square.  Membership is nested and documented:
+#   1 view : {I}
+#   2 views: {I, F_h}                                  (identity + horizontal flip)
+#   4 views: {I, R180, F_h, F_v}                       (Klein four-subgroup)
+#   8 views: {I, R90, R180, R270, F_h, F_h R90, F_h R180, F_h R270}  (full D4)
+# Multi-scale (zoom) views remain implemented but are experimental and disabled.
+tta:
+  aggregator: mean
+  methods:
+    - name: baseline                        # 1 view
+      views:
+        - { name: identity, ops: [] }
+
+    - name: tta2                            # 2 views: identity + horizontal flip
+      views:
+        - { name: identity, ops: [] }
+        - { name: hflip, ops: [{ type: flip, axes: [w] }] }
+
+    - name: tta4                            # 4 views: Klein four-subgroup
+      views:
+        - { name: identity, ops: [] }
+        - { name: rot180, ops: [{ type: rot90, k: 2, axes: [h, w] }] }
+        - { name: hflip, ops: [{ type: flip, axes: [w] }] }
+        - { name: vflip, ops: [{ type: flip, axes: [h] }] }
+
+    - name: tta8                            # 8 views: full D4
+      views:
+        - { name: identity, ops: [] }
+        - { name: rot90, ops: [{ type: rot90, k: 1, axes: [h, w] }] }
+        - { name: rot180, ops: [{ type: rot90, k: 2, axes: [h, w] }] }
+        - { name: rot270, ops: [{ type: rot90, k: 3, axes: [h, w] }] }
+        - { name: hflip, ops: [{ type: flip, axes: [w] }] }
+        - { name: hflip_rot90, ops: [{ type: flip, axes: [w] }, { type: rot90, k: 1, axes: [h, w] }] }
+        - { name: hflip_rot180, ops: [{ type: flip, axes: [w] }, { type: rot90, k: 2, axes: [h, w] }] }
+        - { name: hflip_rot270, ops: [{ type: flip, axes: [w] }, { type: rot90, k: 3, axes: [h, w] }] }
+
+metrics:
+  hd_percentile: 95.0
+  connectivity: 1
+  boundary_tolerance_mm: 2.0
+  empty_policy: nan               # `penalize` only for the sensitivity table
+
+evaluation:
+  split: test
+  output_dir: results/${experiment.name}/evaluation
+  write_summary: true
+  allow_selection_split: false
+
+stats:
+  unit: group
+  primary_test: wilcoxon
+  secondary_test: t_test_rel
+  correction: holm
+  n_bootstrap: 10000
+  bootstrap_seed: 0
+  output_dir: results/${experiment.name}/stats

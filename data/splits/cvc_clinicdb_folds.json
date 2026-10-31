@@ -1,0 +1,89 @@
+{
+  "config_hash": "3e38af743ebeb45c",
+  "config_path": "C:\\Users\\subka\\Documents\\melba-tta\\configs\\cvc_clinicdb\\unet_resnet50.yaml",
+  "files": {
+    "0": "C:\\Users\\subka\\Documents\\melba-tta\\data\\splits\\cvc_clinicdb_fold0.csv",
+    "1": "C:\\Users\\subka\\Documents\\melba-tta\\data\\splits\\cvc_clinicdb_fold1.csv",
+    "2": "C:\\Users\\subka\\Documents\\melba-tta\\data\\splits\\cvc_clinicdb_fold2.csv",
+    "3": "C:\\Users\\subka\\Documents\\melba-tta\\data\\splits\\cvc_clinicdb_fold3.csv",
+    "4": "C:\\Users\\subka\\Documents\\melba-tta\\data\\splits\\cvc_clinicdb_fold4.csv"
+  },
+  "folds": {
+    "0": {
+      "test": {
+        "cases": 118,
+        "groups": 6
+      },
+      "train": {
+        "cases": 357,
+        "groups": 17
+      },
+      "val": {
+        "cases": 137,
+        "groups": 6
+      }
+    },
+    "1": {
+      "test": {
+        "cases": 137,
+        "groups": 6
+      },
+      "train": {
+        "cases": 349,
+        "groups": 17
+      },
+      "val": {
+        "cases": 126,
+        "groups": 6
+      }
+    },
+    "2": {
+      "test": {
+        "cases": 126,
+        "groups": 6
+      },
+      "train": {
+        "cases": 357,
+        "groups": 17
+      },
+      "val": {
+        "cases": 129,
+        "groups": 6
+      }
+    },
+    "3": {
+      "test": {
+        "cases": 129,
+        "groups": 6
+      },
+      "train": {
+        "cases": 381,
+        "groups": 18
+      },
+      "val": {
+        "cases": 102,
+        "groups": 5
+      }
+    },
+    "4": {
+      "test": {
+        "cases": 102,
+        "groups": 5
+      },
+      "train": {
+        "cases": 392,
+        "groups": 18
+      },
+      "val": {
+        "cases": 118,
+        "groups": 6
+      }
+    }
+  },
+  "group_map_file": "C:\\Users\\subka\\Documents\\melba-tta\\data\\splits\\cvc_clinicdb_frame_groups.csv",
+  "n_cases": 612,
+  "n_folds": 5,
+  "n_groups": 29,
+  "seed": 2024,
+  "strategy": "group_map"
+}

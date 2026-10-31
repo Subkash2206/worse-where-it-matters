@@ -1,20 +1,32 @@
-# Datasets and large images
-cvc_clinicdb/
-brats2021/
-PNG/
-TIF/
+# Datasets and large images (anchored to the repository root so that
+# configs/cvc_clinicdb/ is not accidentally ignored)
+/cvc_clinicdb/
+/brats2021/
+data/*
+!data/splits/
+!data/splits/**
+/PNG/
+/TIF/
+*.nii
+*.nii.gz
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.dcm
+*.zip
 
 # Checkpoints and Model Weights
-checkpoints/*.pth
-checkpoints/*.pt
-checkpoints/*.ckpt
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.onnx
 
-# Results and Outputs
-# results/*.csv
-# results/*.json
-# results/figures/*.png
-# results/figures/*.pdf
-# results/figures/*.jpg
+# Results and Outputs: keep small CSVs/JSON/manifests, ignore large maps
+results/**/maps/
+results/**/*.npy
+results/**/*.npz
 
 # Python Environment
 __pycache__/
@@ -22,6 +34,10 @@ __pycache__/
 *$py.class
 *.so
 .Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
 env/
 build/
 develop-eggs/

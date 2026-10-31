@@ -1,0 +1,83 @@
+"""Spacing-aware overlap and surface metrics for binary segmentation."""
+
+from __future__ import annotations
+
+from .overlap import (
+    as_binary,
+    check_pair,
+    confusion_counts,
+    dice,
+    jaccard,
+    precision,
+    recall,
+    volume_mm3,
+)
+from .registry import (
+    AVAILABLE_METRICS,
+    DISTANCE_METRICS,
+    EMPTY_FLAGS,
+    OVERLAP_METRICS,
+    SURFACE_METRICS,
+    UNCERTAINTY_METRICS,
+    VOLUME_METRICS,
+    MetricSettings,
+    compute_case_metrics,
+    empty_flag,
+)
+from .surface import (
+    average_surface_distance,
+    boundary_f1,
+    grid_diagonal_mm,
+    hausdorff_distance,
+    hausdorff_distance_95,
+    hausdorff_distance_95_pooled,
+    normalize_spacing,
+    surface_distances,
+    surface_mask,
+)
+from .uncertainty import (
+    binarized_views,
+    compute_view_uncertainty,
+    foreground_band,
+    per_view_consensus_dice,
+    predictive_entropy_map,
+    view_disagreement_fraction,
+    voxelwise_variance,
+)
+
+__all__ = [
+    "AVAILABLE_METRICS",
+    "DISTANCE_METRICS",
+    "EMPTY_FLAGS",
+    "MetricSettings",
+    "OVERLAP_METRICS",
+    "SURFACE_METRICS",
+    "UNCERTAINTY_METRICS",
+    "VOLUME_METRICS",
+    "as_binary",
+    "average_surface_distance",
+    "binarized_views",
+    "boundary_f1",
+    "check_pair",
+    "compute_case_metrics",
+    "compute_view_uncertainty",
+    "confusion_counts",
+    "dice",
+    "empty_flag",
+    "foreground_band",
+    "grid_diagonal_mm",
+    "hausdorff_distance",
+    "hausdorff_distance_95",
+    "hausdorff_distance_95_pooled",
+    "jaccard",
+    "normalize_spacing",
+    "per_view_consensus_dice",
+    "precision",
+    "predictive_entropy_map",
+    "recall",
+    "surface_distances",
+    "surface_mask",
+    "view_disagreement_fraction",
+    "volume_mm3",
+    "voxelwise_variance",
+]
