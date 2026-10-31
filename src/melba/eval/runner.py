@@ -73,6 +73,7 @@ class EvaluationResult:
     summary_csv: Path | None
     metadata_json: Path
     fold: int = 0
+    seed: int = 0
 
 
 def _resolve_output_dir(config: Config, override: str | Path | None) -> Path:
@@ -105,18 +106,19 @@ def _spacing_text(spacing: Sequence[float]) -> str:
     return ",".join(f"{float(value):g}" for value in spacing)
 
 
-def _resolve_checkpoint(config: Config, fold: int) -> Path | None:
-    """Resolve ``model.checkpoint``, substituting the fold when the path asks for it.
+def _resolve_checkpoint(config: Config, fold: int, seed: int = 0) -> Path | None:
+    """Resolve ``model.checkpoint``, substituting the fold and seed when asked for.
 
-    ``scripts/train.py`` writes one checkpoint per fold
-    (``.../<experiment>/fold{k}/best.pt``), so the config can declare
-    ``model.checkpoint: checkpoints/<experiment>/fold{fold}/best.pt`` and the same
-    config is valid for every fold without manual overrides.
+    ``melba.training.train`` writes one checkpoint per fold/seed run
+    (``.../<experiment>/fold{k}_seed{s}/best.pt``), so the config can declare
+    ``model.checkpoint: checkpoints/<experiment>/fold{fold}_seed{seed}/best.pt`` and
+    the same config is valid for every run without manual overrides.  Patterns that
+    only mention ``{fold}`` keep working.
     """
     setting = config.get("model.checkpoint")
     if not setting:
         return None
-    return config.resolve(str(setting).format(fold=int(fold)))
+    return config.resolve(str(setting).format(fold=int(fold), seed=int(seed)))
 
 
 def _synchronize(device: torch.device) -> None:
@@ -221,6 +223,20 @@ def run_evaluation(
     )
     device = get_device(config.get("device", "auto"))
 
+    # Timing (3 warm-up passes + one measured pass) is only meaningful for a single
+    # reference run; every other run is one forward pass per view.
+    timing_mode = str(config.get("evaluation.timing", "auto")).strip().lower()
+    if timing_mode == "auto":
+        timing_enabled = (resolved_fold, seed) == (0, 0)
+    elif timing_mode in {"true", "always", "yes", "1"}:
+        timing_enabled = True
+    elif timing_mode in {"false", "never", "no", "0"}:
+        timing_enabled = False
+    else:
+        raise ConfigError(
+            f"evaluation.timing must be 'auto', 'true' or 'false', got {timing_mode!r}"
+        )
+
     dataset = (
         dataset
         if dataset is not None
@@ -233,7 +249,7 @@ def run_evaluation(
     injected_model = model is not None
     if model is None:
         model = build_model(config)
-    resolved_checkpoint: Path | None = _resolve_checkpoint(config, resolved_fold)
+    resolved_checkpoint: Path | None = _resolve_checkpoint(config, resolved_fold, seed)
     checkpoint_meta: dict[str, Any] = {}
     if not injected_model:
         if resolved_checkpoint is None:
@@ -255,9 +271,8 @@ def run_evaluation(
     run_id = make_run_id(config)
 
     output_path = _resolve_output_dir(config, output_dir)
-    stem = f"{dataset_name}_{split}"
-    if resolved_fold or config.get("dataset.split.output_pattern"):
-        stem = f"{stem}_fold{resolved_fold}"
+    # Results are per fold *and* seed so a cross-validation grid never overwrites itself.
+    stem = f"{dataset_name}_{split}_fold{resolved_fold}_seed{seed}"
     per_case_csv = output_path / f"{stem}_per_case.csv"
     summary_csv: Path | None = (
         output_path / f"{stem}_summary.csv"
@@ -266,13 +281,28 @@ def run_evaluation(
     )
     metadata_json = output_path / f"{stem}_run.json"
 
-    warmup_runs = int(config.get("evaluation.warmup_runs", 3))
+    warmup_runs = int(config.get("evaluation.warmup_runs", 3)) if timing_enabled else 0
     if warmup_runs < 0:
         raise ConfigError(f"evaluation.warmup_runs must be non-negative, got {warmup_runs}")
     save_maps = bool(config.get("evaluation.save_probability_maps", False))
+    map_methods_setting = config.get("evaluation.probability_map_methods", ["baseline", "tta4"])
+    if map_methods_setting is None:
+        map_methods_setting = []
+    if isinstance(map_methods_setting, str):
+        map_methods_setting = [map_methods_setting]
+    map_methods = tuple(str(name).strip() for name in map_methods_setting)
+    unknown_maps = set(map_methods) - {method.name for method in methods}
+    if save_maps and unknown_maps:
+        raise ConfigError(
+            f"evaluation.probability_map_methods names unknown method(s) {sorted(unknown_maps)}; "
+            f"available: {sorted(method.name for method in methods)}"
+        )
+    save_variance = bool(config.get("evaluation.save_variance_maps", False))
     map_setting = config.get("evaluation.probability_map_dir")
-    map_dir = config.resolve(map_setting) if map_setting else (output_path / "maps")
-    if save_maps:
+    map_base = config.resolve(map_setting) if map_setting else (output_path / "maps")
+    # One sub-directory per run so the ensemble can pick up every fold/seed.
+    map_dir = map_base / f"fold{resolved_fold}_seed{seed}"
+    if save_maps and map_methods:
         map_dir.mkdir(parents=True, exist_ok=True)
     boundary_band_px = int(config.get("evaluation.uncertainty_boundary_band_px", 3))
     emit_penalized = bool(config.get("evaluation.emit_penalized_metrics", True))
@@ -303,20 +333,26 @@ def run_evaluation(
 
             for method in methods:
                 # 3 warm-up passes, then one timed pass (CUDA is synchronised so the
-                # measured wall-clock includes kernel execution time).
-                for _ in range(warmup_runs):
-                    predict_per_view(
-                        model, image, device, method, activation=activation, amp=amp
-                    )
-                _synchronize(device)
-                _reset_peak_memory(device)
-                started = time.perf_counter()
+                # measured wall-clock includes kernel execution time).  Every other run
+                # skips warm-ups and timing, so it is one forward pass per view.
+                if timing_enabled:
+                    for _ in range(warmup_runs):
+                        predict_per_view(
+                            model, image, device, method, activation=activation, amp=amp
+                        )
+                    _synchronize(device)
+                    _reset_peak_memory(device)
+                    started = time.perf_counter()
                 view_probabilities = predict_per_view(
                     model, image, device, method, activation=activation, amp=amp
                 )
-                _synchronize(device)
-                latency_ms = (time.perf_counter() - started) * 1000.0
-                peak_memory_mb = _peak_memory_mb(device)
+                if timing_enabled:
+                    _synchronize(device)
+                    latency_ms = (time.perf_counter() - started) * 1000.0
+                    peak_memory_mb = _peak_memory_mb(device)
+                else:
+                    latency_ms = float("nan")
+                    peak_memory_mb = float("nan")
 
                 if view_probabilities.shape[1] != 1:
                     raise ConfigError(
@@ -353,8 +389,9 @@ def run_evaluation(
                 values.update(
                     {name: uncertainty[name] for name in metric_settings.uncertainty_names}
                 )
-                values["latency_ms"] = latency_ms
-                values["peak_memory_mb"] = peak_memory_mb
+                if timing_enabled:
+                    values["latency_ms"] = latency_ms
+                    values["peak_memory_mb"] = peak_memory_mb
                 # Sensitivity values: the same distance metrics with an empty
                 # prediction penalised by the image diagonal (all cases, no NaN).
                 if emit_penalized:
@@ -391,15 +428,16 @@ def run_evaluation(
                     writer.write({**provenance, "metric": metric_name, "value": value})
                 rows_written += len(values)
 
-                if save_maps:
+                if save_maps and method.name in map_methods:
                     np.save(
                         map_dir / f"{case_id}__{method.name}__mean.npy",
                         aggregated.astype(np.float16),
                     )
-                    np.save(
-                        map_dir / f"{case_id}__{method.name}__var.npy",
-                        native_views.var(axis=0, ddof=0).astype(np.float16),
-                    )
+                    if save_variance:
+                        np.save(
+                            map_dir / f"{case_id}__{method.name}__var.npy",
+                            native_views.var(axis=0, ddof=0).astype(np.float16),
+                        )
 
     return _finalise(
         config=config,
@@ -424,7 +462,9 @@ def run_evaluation(
         created=created,
         fold=resolved_fold,
         warmup_runs=warmup_runs,
-        save_maps=save_maps,
+        timing_enabled=timing_enabled,
+        save_maps=save_maps and bool(map_methods),
+        map_methods=map_methods,
         map_dir=map_dir,
         emit_penalized=emit_penalized,
     )
@@ -457,7 +497,9 @@ def _finalise(
     created: str,
     fold: int = 0,
     warmup_runs: int = 0,
+    timing_enabled: bool = True,
     save_maps: bool = False,
+    map_methods: Sequence[str] = (),
     map_dir: Path | None = None,
     emit_penalized: bool = True,
 ) -> EvaluationResult:
@@ -491,14 +533,16 @@ def _finalise(
         "threshold": threshold,
         "activation": activation,
         "timing": {
+            "enabled": bool(timing_enabled),
             "warmup_runs": warmup_runs,
             "cuda_synchronize": device.type == "cuda",
-            "metrics": list(TIMING_METRICS),
+            "metrics": list(TIMING_METRICS) if timing_enabled else [],
         },
         "probability_maps": {
             "saved": bool(save_maps),
             "dir": str(map_dir) if save_maps and map_dir is not None else None,
             "dtype": "float16" if save_maps else None,
+            "methods": list(map_methods) if save_maps else [],
         },
         "metrics": asdict(metric_settings),
         "normalization": config.get("dataset.normalization"),
@@ -534,6 +578,7 @@ def _finalise(
         run_id=run_id,
         split=split,
         fold=fold,
+        seed=seed,
         n_cases=cases_evaluated,
         methods=tuple(method.name for method in methods),
         per_case_csv=per_case_csv,

@@ -28,6 +28,9 @@ results/**/maps/
 results/**/*.npy
 results/**/*.npz
 
+# Run logs (progress, PIDs, per-run stdout)
+logs/
+
 # Python Environment
 __pycache__/
 *.py[cod]

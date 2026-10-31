@@ -2,9 +2,9 @@
 
 Journal extension (MELBA) of the MICCAI UNSURE workshop paper on geometric
 test-time augmentation (TTA) for medical image segmentation. This repository is a
-clean rebuild: the previous code base (`github.com/Subkash2206/tta-medseg-evaluation`,
-still present under `src/` for reference only) is **not** used for any reported
-number.
+clean rebuild: the previous code base
+(`github.com/Subkash2206/tta-medseg-evaluation`) is **not** used for any reported
+number, and its modules have been removed from this repository.
 
 ## What this rebuild fixes
 
@@ -27,13 +27,17 @@ number.
 ```
 configs/                     YAML experiment configs (base.yaml + dataset/model configs)
   base.yaml                  shared defaults: seed, paths, metrics, stats, runtime
-  cvc_clinicdb/unet_resnet50.yaml
+  cvc_clinicdb/unet_resnet50.yaml    ImageNet ResNet-50 UNet, ImageNet normalization
+  cvc_clinicdb/swinunetr_2d.yaml     MONAI SwinUNETR (2D, from scratch), dataset statistics
 data/splits/                 frame -> video mapping (yours) and generated fold CSVs
 docs/splits.md               how to provide the CVC-ClinicDB frame → video mapping
 scripts/
   make_splits.py             group-level split creation (writes data/splits/*.csv)
-  train.py                   training, val-only checkpoint selection
+  compute_normalization.py   per-fold training-set mean/std (from-scratch models)
+  train.py                   training, val-only checkpoint selection, resumable
   evaluate.py                per-case evaluation of every configured TTA method
+  run_grid.py                folds x seeds grid; resumes whatever is incomplete
+  aggregate.py               pooled fold/seed tables, paired stats, seed ensembles
   run_stats.py               paired statistics over a per-case CSV
 src/melba/
   config.py                  YAML loading, defaults, ${refs}, overrides, fingerprint
@@ -42,11 +46,11 @@ src/melba/
   transforms/                invertible geometric transforms, YAML → TTA views
   inference/                 TTA inference with inverse-transformed aggregation
   data/                      video-level splits, CVC-ClinicDB dataset, data loaders
-  models/                    smp UNet / MONAI SegResNet factory, checkpoint loading
-  eval/                      long-format records, per-case runner, run metadata
+  models/                    smp UNet / MONAI SegResNet / 2D SwinUNETR factory
+  training/                  training loop, last.pt resume, grid state helpers
+  eval/                      long-format records, per-case runner, pooling/ensembles
   stats/                     Wilcoxon + bootstrap CI + effect size + Holm
 tests/                       pytest suite (metrics, transforms, TTA, splits, stats, runner)
-src/                         legacy code from the workshop paper — reference only
 ```
 
 ## Install
@@ -95,25 +99,76 @@ Laptop GPU); `device: auto` picks whatever is available.
    python scripts/evaluate.py --config configs/cvc_clinicdb/unet_resnet50.yaml --fold 0
    ```
 
-   Outputs, under `results/<experiment>/evaluation/`:
-   * `cvc_clinicdb_test_fold0_per_case.csv` — long format, one row per
+   Outputs, under `results/<experiment>/evaluation/` (one file per fold **and** seed,
+   so a 5-fold x 3-seed grid never overwrites itself):
+   * `cvc_clinicdb_test_fold0_seed0_per_case.csv` — long format, one row per
      case/method/metric (with `fold`, `empty_flag`, uncertainty and timing rows);
-   * `cvc_clinicdb_test_fold0_summary.csv` — n/mean/std/median/IQR/count per metric;
-   * `cvc_clinicdb_test_fold0_run.json` — config hash, seed, environment,
-     checkpoint hash, timing setup.
+   * `cvc_clinicdb_test_fold0_seed0_summary.csv` — n/mean/std/median/IQR/count per metric;
+   * `cvc_clinicdb_test_fold0_seed0_run.json` — config hash, seed, environment,
+     checkpoint hash, timing setup, probability-map directory;
+   * `maps/fold0_seed0/<case>__{baseline,tta4}__mean.npy` — float16 mean probability
+     maps on the native grid (used by `scripts/aggregate.py`, gitignored).
 
 5. **Statistics**, pooling all five folds so each video is a test unit exactly once:
 
    ```bash
    python scripts/run_stats.py \
        --config configs/cvc_clinicdb/unet_resnet50.yaml \
-       --per-case results/cvc_clinicdb_unet_resnet50/evaluation/cvc_clinicdb_test_fold{0,1,2,3,4}_per_case.csv \
+       --per-case results/cvc_clinicdb_unet_resnet50/evaluation/cvc_clinicdb_test_fold{0,1,2,3,4}_seed0_per_case.csv \
        --treatment tta8
    ```
 
    Pooling is validated: a case or video that appears in more than one fold aborts
    the analysis. With `unit: group` every video contributes one paired value, so
    the sample size is the number of videos (29 for CVC-ClinicDB), not frames.
+
+## Cross-validation grid (5 folds x 3 seeds, resumable)
+
+`scripts/run_grid.py` trains and evaluates every fold/seed run and decides per run
+what still has to happen by looking at the disk:
+
+| state on disk | action |
+| --- | --- |
+| `run_done.json` + evaluation marker | skip |
+| `run_done.json`, no marker | evaluation only |
+| `last.pt` only (killed mid-training) | resume from that epoch |
+| nothing | train from scratch |
+
+Every epoch atomically writes `checkpoints/<experiment>/fold<k>_seed<s>/last.pt`
+(model, optimizer, scheduler, AMP scaler, epoch, best value, early-stopping counter
+and all RNG states for python/numpy/torch/cuda), so the process can be killed at any
+moment and the next launch continues the same trajectory. Training runs in the grid
+process itself, so stopping the grid stops training at the next epoch boundary.
+
+```bash
+python scripts/run_grid.py --config configs/cvc_clinicdb/unet_resnet50.yaml \
+    --folds 0 1 2 3 4 --seeds 0 1 2 --epochs 100 --patience 20
+python scripts/run_grid.py --config ... --status-only   # what is done / pending
+```
+
+Timing is measured once, for fold 0 / seed 0 (`evaluation.timing: auto`, three
+warm-ups + one timed pass); every other run does exactly one forward pass per view.
+
+## Pooling folds and seeds (`scripts/aggregate.py`)
+
+```bash
+python scripts/aggregate.py --config configs/cvc_clinicdb/unet_resnet50.yaml
+```
+
+Writes under `results/<experiment>/stats/aggregate/`:
+
+* `pooled_by_seed.csv` — per method and metric, the pooled 29-video result of each
+  seed, the mean and the standard deviation across seeds;
+* `paired_by_seed.csv` / `paired_seed_averaged.csv` — video-level Wilcoxon tests
+  pooled over the 5 folds, once per seed and once with metric values averaged per
+  case over seeds (so a video is still one test unit);
+* `detection_by_seed.csv` / `detection_seed_averaged.csv` — missed-detection rates,
+  transition tables and exact McNemar tests pooled over folds;
+* `ensemble_per_case.csv`, `ensemble_comparison.csv`, `ensemble_detection.csv` — the
+  seed ensemble of the baseline maps (`ensemble3`), and of the tta4 maps
+  (`ensemble3_tta4`, i.e. 3 seeds x 4 views), thresholded at 0.5 and scored with the
+  same metric code; compared with `baseline`, `tta4` and each other, missed
+  detections included.
 
 Any config value can be overridden without editing files:
 `--set model.checkpoint=checkpoints/x.pt metrics.empty_policy=nan device=cpu`.
@@ -181,8 +236,32 @@ resampling onto the native grid) and writes, per case and method:
 * `latency_ms`, `peak_memory_mb` — wall-clock per case (3 warm-up passes, CUDA
   synchronised) and `torch.cuda.max_memory_allocated` for that view count.
 
-`evaluation.save_probability_maps: true` additionally writes float16 mean and
-variance maps (`*.npy`, ignored by git) to `evaluation.probability_map_dir`.
+`evaluation.save_probability_maps: true` writes the float16 mean probability map of
+the methods listed in `evaluation.probability_map_methods` (default `[baseline, tta4]`)
+to `evaluation.probability_map_dir/fold<k>_seed<s>/<case>__<method>__mean.npy`
+(native grid, gitignored). Those maps are what `scripts/aggregate.py` averages into
+the `ensemble3` / `ensemble3_tta4` predictions; `evaluation.save_variance_maps: true`
+additionally writes `*__var.npy`.
+
+## Normalization
+
+`dataset.normalization.kind` selects the input statistics:
+
+| kind | mean/std | when |
+| --- | --- | --- |
+| `imagenet` (default) | encoder's own values from `smp.encoders.get_preprocessing_params` | pretrained smp encoders |
+| `dataset` | per-fold **training-set** mean/std from `dataset.normalization.stats_file` | models trained from scratch (`monai_swinunetr`) |
+| `custom` | explicit `mean`/`std` lists | other encoders |
+| `none` | no normalization | debugging only |
+
+`dataset` statistics are computed once and cached in JSON:
+
+```bash
+python scripts/compute_normalization.py --config configs/cvc_clinicdb/swinunetr_2d.yaml
+```
+
+Every fold uses the statistics of *its own* training split (never validation or test
+frames), so switching folds cannot leak test intensities into the input scaling.
 
 ## Missed detection and empty-mask handling
 
@@ -261,14 +340,22 @@ every transform/inverse pair plus every view in the shipped config, determinism 
 group splits, leakage detection, TTA inversion/aggregation, bootstrap/Wilcoxon/Holm
 behaviour, native-grid metric computation, checkpoint round-trips, CLI wiring, and
 an end-to-end evaluation run that checks the long-format schema, provenance and
-both split guards.
+both split guards. The journal-extension additions are covered as well: HD95 parity
+with `monai.metrics.compute_hausdorff_distance`, exact resume (atomic `last.pt`,
+RNG round-trip, epoch continuation, per-run directories), grid state classification
+(skip / evaluate-only / resume / fresh), timing gating (warm-ups only for fold 0 /
+seed 0), probability-map selection, per-fold dataset statistics, pooled seed tables,
+seed-averaged paired tests, the seed ensemble and 2D SwinUNETR forward passes.
 
 ## Status / next steps
 
-* CVC-ClinicDB (2D) pipeline is complete and tested end-to-end (5 folds, pooled
-  statistics, uncertainty/cost analysis).
-* BraTS 2021, SwinUNETR and SegResNet are **not started** (on hold per the review
-  decision); the `monai_segresnet` factory branch exists but has no dataset reader.
+* CVC-ClinicDB (2D) pipeline is complete and tested end-to-end (5 folds x 3 seeds,
+  resumable grid, pooled statistics, seed ensembles, uncertainty/cost analysis).
+* `configs/cvc_clinicdb/swinunetr_2d.yaml` (MONAI SwinUNETR, `spatial_dims=2`, from
+  scratch, per-fold training statistics) and its factory branch are implemented and
+  unit-tested, but no SwinUNETR results have been produced yet.
+* BraTS 2021 (3D) is **not started**: it needs an NIfTI reader and sliding-window
+  inference. The `monai_segresnet` branch exists but has no dataset reader.
 * The CVC-ClinicDB frame → sequence grouping is built reproducibly from the official
   end-frame table by `scripts/make_cvc_mapping.py` (`dataset.split.sequence_end_frames`)
   and validated against the image stems before any split is written;
@@ -276,6 +363,4 @@ both split guards.
   explicitly labelled proxy.
 * Legacy `src/` code has been removed; `results/*.csv` moved unchanged to
   `legacy_results/`.
-* `scripts/dry_run.py` and `scripts/investigate_bf1.py` still import the removed
-  legacy modules and are therefore non-functional; delete or port them on request.
 

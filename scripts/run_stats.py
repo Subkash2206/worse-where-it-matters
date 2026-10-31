@@ -4,11 +4,11 @@ Usage
 -----
     # single fold
     python scripts/run_stats.py --config configs/cvc_clinicdb/unet_resnet50.yaml \
-        --per-case results/.../cvc_clinicdb_test_fold0_per_case.csv --treatment tta8
+        --per-case results/.../cvc_clinicdb_test_fold0_seed0_per_case.csv --treatment tta8
 
     # pooled over all 5 cross-validation folds (one video = one test unit)
     python scripts/run_stats.py --config configs/cvc_clinicdb/unet_resnet50.yaml \
-        --per-case results/.../cvc_clinicdb_test_fold{0,1,2,3,4}_per_case.csv --treatment tta8
+        --per-case results/.../cvc_clinicdb_test_fold{0,1,2,3,4}_seed0_per_case.csv --treatment tta8
 
 The primary test is the Wilcoxon signed-rank test over per-group values (video
 level), with a seeded bootstrap CI, rank-biserial effect size, Holm correction and

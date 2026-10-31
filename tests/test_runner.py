@@ -68,7 +68,11 @@ def _conv_model() -> ConvModel:
 @pytest.fixture
 def eval_config(toy_dataset_config):
     return toy_dataset_config.with_overrides(
-        {"metrics.names": ["dice", "hd95", "assd", "boundary_f1"]}
+        {
+            "metrics.names": ["dice", "hd95", "assd", "boundary_f1"],
+            # most runner tests want the timing rows; the auto-gating has its own test
+            "evaluation.timing": True,
+        }
     )
 
 
@@ -262,11 +266,14 @@ def test_checkpoint_path_is_fold_aware(eval_config) -> None:
     from melba.eval.runner import _resolve_checkpoint
 
     config = eval_config.with_overrides(
-        {"model.checkpoint": "checkpoints/exp/fold{fold}/best.pt"}
+        {"model.checkpoint": "checkpoints/exp/fold{fold}_seed{seed}/best.pt"}
     )
-    path = _resolve_checkpoint(config, 3)
+    path = _resolve_checkpoint(config, 3, 2)
     assert path.name == "best.pt"
-    assert "fold3" in path.parts
+    assert "fold3_seed2" in path.parts
+    # patterns that only mention the fold keep working
+    fold_only = eval_config.with_overrides({"model.checkpoint": "checkpoints/exp/fold{fold}/best.pt"})
+    assert "fold1" in _resolve_checkpoint(fold_only, 1).parts
     assert _resolve_checkpoint(eval_config.with_overrides({"model.checkpoint": None}), 0) is None
 
 
@@ -322,7 +329,7 @@ def test_uncertainty_rows_warmup_and_timing(eval_config, tmp_path) -> None:
     assert frame.loc[frame["metric"] == "peak_memory_mb", "value"].isna().all()
 
 
-def test_probability_maps_can_be_saved_as_float16(eval_config, tmp_path) -> None:
+def test_probability_maps_are_saved_for_the_ensemble(eval_config, tmp_path) -> None:
     map_dir = tmp_path / "maps"
     config = eval_config.with_overrides(
         {
@@ -332,11 +339,37 @@ def test_probability_maps_can_be_saved_as_float16(eval_config, tmp_path) -> None
     )
     evaluate(config, model=TinyModel(), limit=1, output_dir=tmp_path / "maps_run", progress=False)
 
-    files = sorted(map_dir.glob("*.npy"))
-    assert len(files) == 4 * 2  # mean and variance per method
+    run_dirs = [path for path in map_dir.iterdir() if path.is_dir()]
+    assert len(run_dirs) == 1  # one directory per fold/seed
+    assert run_dirs[0].name == f"fold0_seed{config['seed']}"
+    files = sorted(run_dirs[0].glob("*.npy"))
+    # only the methods listed in evaluation.probability_map_methods, mean only
+    assert [path.name.split("__")[1] for path in files] == ["baseline", "tta4"]
     saved = np.load(files[0])
     assert saved.dtype == np.float16
     assert saved.shape == (40, 56)  # native grid, not the 64x64 network grid
+
+    variance_config = config.with_overrides(
+        {
+            "evaluation.save_variance_maps": True,
+            "evaluation.probability_map_dir": str(tmp_path / "maps_var"),
+        }
+    )
+    evaluate(
+        variance_config, model=TinyModel(), limit=1, output_dir=tmp_path / "maps_var_run", progress=False
+    )
+    var_dir = tmp_path / "maps_var" / f"fold0_seed{config['seed']}"
+    assert len(list(var_dir.glob("*__mean.npy"))) == 2
+    assert len(list(var_dir.glob("*__var.npy"))) == 2
+
+    with pytest.raises(ConfigError, match="probability_map_methods"):
+        evaluate(
+            config.with_overrides({"evaluation.probability_map_methods": ["does_not_exist"]}),
+            model=TinyModel(),
+            limit=1,
+            output_dir=tmp_path / "bad_maps",
+            progress=False,
+        )
 
 
 def test_penalized_metrics_flag_missed_detections(eval_config, tmp_path) -> None:
@@ -373,4 +406,42 @@ def test_resample_probability_map() -> None:
     with pytest.raises(ValueError, match="probability map"):
         resample_probability_map(np.zeros((1, 5)), (3,))
 
+
+
+
+def test_timing_is_limited_to_the_reference_run(eval_config, tmp_path) -> None:
+    """Warm-ups and latency/memory rows are only measured for fold 0 / seed 0."""
+    views = 1 + 2 + 4 + 8
+
+    reference = eval_config.with_overrides({"evaluation.timing": "auto", "seed": 0})
+    model = CountingModel()
+    result = evaluate(
+        reference, model=model, limit=1, output_dir=tmp_path / "reference", progress=False
+    )
+    frame = read_long_csv(result.per_case_csv)
+    assert {"latency_ms", "peak_memory_mb"} <= set(frame["metric"])
+    assert model.calls == views * 4  # 3 warm-ups + 1 measured pass per method
+    assert result.per_case_csv.name == "cvc_clinicdb_test_fold0_seed0_per_case.csv"
+
+    other = eval_config.with_overrides({"evaluation.timing": "auto", "seed": 1})
+    model = CountingModel()
+    result = evaluate(other, model=model, limit=1, output_dir=tmp_path / "other", progress=False)
+    frame = read_long_csv(result.per_case_csv)
+    assert "latency_ms" not in set(frame["metric"])
+    assert "peak_memory_mb" not in set(frame["metric"])
+    assert model.calls == views  # exactly one forward pass per view
+    metadata = json.loads(result.metadata_json.read_text(encoding="utf-8"))
+    assert metadata["timing"]["enabled"] is False
+    assert metadata["timing"]["warmup_runs"] == 0
+
+
+def test_evaluation_rejects_an_unknown_timing_mode(eval_config, tmp_path) -> None:
+    with pytest.raises(ConfigError, match="evaluation.timing"):
+        evaluate(
+            eval_config.with_overrides({"evaluation.timing": "sometimes"}),
+            model=TinyModel(),
+            limit=1,
+            output_dir=tmp_path / "bad_timing",
+            progress=False,
+        )
 

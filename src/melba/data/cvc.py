@@ -25,6 +25,14 @@ from melba.config import Config
 from .splits import SplitError, read_split_csv, split_file_for_fold
 from .normalization import NormalizationSpec
 
+# The distributed CVC-ClinicDB TIFFs trigger one benign libtiff message per frame
+# ("Sum of Photometric type-related color channels and ExtraSamples doesn't match").
+# Silencing the OpenCV log keeps run logs readable; unreadable frames still raise.
+try:  # pragma: no cover - depends on the OpenCV build
+    cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_SILENT)
+except Exception:  # pragma: no cover - older/newer OpenCV layouts
+    pass
+
 __all__ = [
     "CVCItem",
     "CVCDataset",

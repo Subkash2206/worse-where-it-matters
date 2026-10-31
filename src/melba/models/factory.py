@@ -25,7 +25,7 @@ __all__ = [
     "load_checkpoint",
 ]
 
-MODEL_ARCHITECTURES: tuple[str, ...] = ("smp_unet", "monai_segresnet")
+MODEL_ARCHITECTURES: tuple[str, ...] = ("smp_unet", "monai_segresnet", "monai_swinunetr")
 
 
 def _attach_encoder_dropout(model: nn.Module, dropout_p: float) -> None:
@@ -96,6 +96,29 @@ def build_model(config: Config) -> nn.Module:
             blocks_down=tuple(config.get("model.blocks_down", (1, 2, 2, 4))),
             blocks_up=tuple(config.get("model.blocks_up", (1, 1, 1))),
             dropout_prob=dropout_p,
+        )
+
+    if architecture == "monai_swinunetr":
+        from monai.networks.nets import SwinUNETR
+
+        # SwinUNETR is trained from scratch here: no MONAI pretrained weights are
+        # downloaded, so the input statistics come from the training split
+        # (dataset.normalization.kind: dataset) instead of ImageNet.
+        spatial_dims = int(config.get("model.spatial_dims", 2))
+        return SwinUNETR(
+            in_channels=in_channels,
+            out_channels=num_classes,
+            spatial_dims=spatial_dims,
+            feature_size=int(config.get("model.feature_size", 24)),
+            depths=tuple(config.get("model.depths", (2, 2, 2, 2))),
+            num_heads=tuple(config.get("model.num_heads", (3, 6, 12, 24))),
+            patch_size=int(config.get("model.patch_size", 2)),
+            window_size=int(config.get("model.window_size", 7)),
+            drop_rate=dropout_p,
+            attn_drop_rate=float(config.get("model.attn_drop_rate", 0.0)),
+            dropout_path_rate=float(config.get("model.dropout_path_rate", 0.0)),
+            use_checkpoint=False,
+            use_v2=bool(config.get("model.use_v2", False)),
         )
 
     raise ConfigError(

@@ -1,0 +1,138 @@
+# -----------------------------------------------------------------------------
+# CVC-ClinicDB, 2D SwinUNETR (MONAI, trained from scratch).
+#
+# Mirrors configs/cvc_clinicdb/unet_resnet50.yaml (same splits, same TTA view
+# subsets, same metrics) so the two architectures are directly comparable. The two
+# deliberate differences are:
+#
+#   * the model is trained from scratch (no pretrained weights), therefore
+#   * inputs are normalized with the training-set mean/std of the fold being
+#     trained (`dataset.normalization.kind: dataset`), NOT with ImageNet
+#     statistics. Compute them once with
+#         python scripts/compute_normalization.py --config configs/cvc_clinicdb/swinunetr_2d.yaml
+# -----------------------------------------------------------------------------
+defaults:
+  - ../base.yaml
+
+experiment:
+  name: cvc_clinicdb_swinunetr_2d
+  description: "2D SwinUNETR from scratch with geometry-aware TTA"
+
+dataset:
+  name: cvc_clinicdb
+  root: cvc_clinicdb
+  images_dir: cvc_clinicdb/original
+  masks_dir: cvc_clinicdb/ground_truth
+  image_extension: .tif
+  image_size: [352, 352]          # SwinUNETR needs multiples of 32 (352 = 11 x 32)
+  in_channels: 3
+  num_classes: 1
+  mask_threshold: 127
+  spacing_mm: [1.0, 1.0]
+
+  normalization:
+    kind: dataset                 # per-fold training statistics, not ImageNet
+    stats_file: data/splits/cvc_clinicdb_norm_stats.json
+
+  split:
+    strategy: group_map           # group_map | contiguous_blocks (proxy only)
+    group_map_file: data/splits/cvc_clinicdb_frame_groups.csv
+    frame_column: case_id
+    group_column: group_id
+    # Official CVC-ClinicDB frame -> sequence table (Bernal et al., 2015): the last
+    # frame of each of the 29 sequences, expanded by scripts/make_cvc_mapping.py.
+    sequence_end_frames:
+      [25, 50, 67, 78, 103, 126, 151, 177, 199, 205, 227, 252, 277, 297, 317,
+       342, 363, 383, 408, 428, 447, 466, 478, 503, 528, 546, 571, 591, 612]
+    n_folds: 5
+    fold: 0
+    output_pattern: data/splits/cvc_clinicdb_fold{fold}.csv
+    block_size: 20
+    seed: 2024
+
+  augmentation:
+    hflip_p: 0.5
+    vflip_p: 0.5
+    rot90_p: 0.5
+    brightness: 0.15
+    contrast: 0.15
+
+model:
+  architecture: monai_swinunetr
+  spatial_dims: 2
+  in_channels: 3
+  num_classes: 1
+  feature_size: 24                # 6.3M parameters at 352x352 (2D, from scratch)
+  depths: [2, 2, 2, 2]
+  num_heads: [3, 6, 12, 24]
+  patch_size: 2
+  window_size: 7
+  dropout_p: 0.0
+  attn_drop_rate: 0.0
+  dropout_path_rate: 0.0
+  use_v2: false
+  checkpoint: checkpoints/cvc_clinicdb_swinunetr_2d/fold{fold}_seed{seed}/best.pt
+  selection_split: val
+
+training:
+  epochs: 100
+  batch_size: 4                   # 6 GB card: SwinUNETR at 352x352 is heavier than UNet
+  learning_rate: 1.0e-4
+  monitor: val_dice
+  train_aug: geometric_d4
+
+
+# Geometric TTA view subsets: exactly 1, 2, 4 and 8 views of the dihedral group D4 of
+# the square (nested, documented in docs/tta.md). Identical to the UNet config so the
+# two architectures are compared under the same protocol.
+tta:
+  aggregator: mean
+  methods:
+    - name: baseline                        # 1 view
+      views:
+        - { name: identity, ops: [] }
+
+    - name: tta2                            # 2 views: identity + horizontal flip
+      views:
+        - { name: identity, ops: [] }
+        - { name: hflip, ops: [{ type: flip, axes: [w] }] }
+
+    - name: tta4                            # 4 views: Klein four-subgroup
+      views:
+        - { name: identity, ops: [] }
+        - { name: rot180, ops: [{ type: rot90, k: 2, axes: [h, w] }] }
+        - { name: hflip, ops: [{ type: flip, axes: [w] }] }
+        - { name: vflip, ops: [{ type: flip, axes: [h] }] }
+
+    - name: tta8                            # 8 views: full D4
+      views:
+        - { name: identity, ops: [] }
+        - { name: rot90, ops: [{ type: rot90, k: 1, axes: [h, w] }] }
+        - { name: rot180, ops: [{ type: rot90, k: 2, axes: [h, w] }] }
+        - { name: rot270, ops: [{ type: rot90, k: 3, axes: [h, w] }] }
+        - { name: hflip, ops: [{ type: flip, axes: [w] }] }
+        - { name: hflip_rot90, ops: [{ type: flip, axes: [w] }, { type: rot90, k: 1, axes: [h, w] }] }
+        - { name: hflip_rot180, ops: [{ type: flip, axes: [w] }, { type: rot90, k: 2, axes: [h, w] }] }
+        - { name: hflip_rot270, ops: [{ type: flip, axes: [w] }, { type: rot90, k: 3, axes: [h, w] }] }
+
+metrics:
+  hd_percentile: 95.0
+  connectivity: 1
+  boundary_tolerance_mm: 2.0
+  empty_policy: nan               # `penalize` only for the sensitivity table
+
+evaluation:
+  split: test
+  output_dir: results/${experiment.name}/evaluation
+  write_summary: true
+  allow_selection_split: false
+
+stats:
+  unit: group
+  primary_test: wilcoxon
+  secondary_test: t_test_rel
+  correction: holm
+  n_bootstrap: 10000
+  bootstrap_seed: 0
+  output_dir: results/${experiment.name}/stats
+

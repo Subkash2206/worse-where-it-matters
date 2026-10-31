@@ -15,6 +15,7 @@ from the encoder configuration of the same config, with explicit
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
@@ -23,15 +24,55 @@ import numpy as np
 from melba.config import Config, ConfigError
 
 __all__ = [
+    "DEFAULT_STATS_FILE",
     "IMAGENET_MEAN",
     "IMAGENET_STD",
     "NORMALIZATION_KINDS",
     "NormalizationSpec",
+    "load_dataset_statistics",
 ]
 
 IMAGENET_MEAN: tuple[float, float, float] = (0.485, 0.456, 0.406)
 IMAGENET_STD: tuple[float, float, float] = (0.229, 0.224, 0.225)
-NORMALIZATION_KINDS: tuple[str, ...] = ("imagenet", "custom", "none")
+NORMALIZATION_KINDS: tuple[str, ...] = ("imagenet", "custom", "dataset", "none")
+
+#: default location of the per-fold training statistics (written by
+#: ``scripts/compute_normalization.py``)
+DEFAULT_STATS_FILE = "data/splits/cvc_clinicdb_norm_stats.json"
+
+
+def load_dataset_statistics(config: Config, fold: int | None = None) -> dict[str, Any]:
+    """Mean/std of one fold's *training* frames from the statistics JSON.
+
+    ``scripts/compute_normalization.py`` writes one entry per fold
+    (``{"fold0": {"mean": [...], "std": [...]}, ...}``).  Using the training split of
+    the fold being trained keeps the statistics free of validation/test frames.
+    """
+    section: Mapping[str, Any] = config.get("dataset.normalization") or {}
+    stats_file = section.get("stats_file") or DEFAULT_STATS_FILE
+    path = config.resolve(str(stats_file))
+    if not path.is_file():
+        raise ConfigError(
+            f"dataset.normalization.kind is 'dataset' but the statistics file {path} does "
+            "not exist; run scripts/compute_normalization.py to compute the training-set "
+            "mean/std for every fold"
+        )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    resolved_fold = int(
+        fold if fold is not None else (config.get("dataset.split.fold", 0) or 0)
+    )
+    entry = payload.get(f"fold{resolved_fold}")
+    if entry is None:
+        raise ConfigError(
+            f"{path} has no statistics for fold {resolved_fold}; available: "
+            f"{sorted(key for key in payload if key.startswith('fold'))}"
+        )
+    return {
+        "mean": tuple(float(value) for value in entry["mean"]),
+        "std": tuple(float(value) for value in entry["std"]),
+        "fold": resolved_fold,
+        "path": str(path),
+    }
 
 
 def _encoder_preprocessing_params(config: Config) -> tuple[tuple[float, ...], tuple[float, ...]]:
@@ -84,7 +125,7 @@ class NormalizationSpec:
         return self.kind != "none"
 
     @classmethod
-    def from_config(cls, config: Config) -> "NormalizationSpec":
+    def from_config(cls, config: Config, fold: int | None = None) -> "NormalizationSpec":
         section: Mapping[str, Any] = config.get("dataset.normalization") or {}
         kind = str(section.get("kind", "imagenet")).strip().lower()
         if kind == "none":
@@ -95,6 +136,11 @@ class NormalizationSpec:
                 mean=tuple(float(value) for value in (section.get("mean") or [])),
                 std=tuple(float(value) for value in (section.get("std") or [])),
             )
+        if kind == "dataset":
+            statistics = load_dataset_statistics(config, fold=fold)
+            mean = section.get("mean") or statistics["mean"]
+            std = section.get("std") or statistics["std"]
+            return cls(kind="dataset", mean=mean, std=std)
         if kind != "imagenet":
             raise ConfigError(
                 f"Unknown dataset.normalization.kind {kind!r}; expected one of "
