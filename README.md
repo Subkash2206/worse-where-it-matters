@@ -38,6 +38,7 @@ scripts/
   train.py                   training, val-only checkpoint selection, resumable
   evaluate.py                per-case evaluation of every configured TTA method
   run_grid.py                folds x seeds grid; resumes whatever is incomplete
+  run_one.py                 one fold/seed job in its own process (train + evaluate)
   aggregate.py               pooled fold/seed tables, paired stats, seed ensembles
   run_stats.py               paired statistics over a per-case CSV
 src/melba/
@@ -138,8 +139,16 @@ what still has to happen by looking at the disk:
 Every epoch atomically writes `checkpoints/<experiment>/fold<k>_seed<s>/last.pt`
 (model, optimizer, scheduler, AMP scaler, epoch, best value, early-stopping counter
 and all RNG states for python/numpy/torch/cuda), so the process can be killed at any
-moment and the next launch continues the same trajectory. Training runs in the grid
-process itself, so stopping the grid stops training at the next epoch boundary.
+moment and the next launch continues the same trajectory.
+
+Each run executes in its **own child process** (`scripts/run_one.py`): a CUDA/cuDNN
+crash (e.g. `CUDNN_STATUS_BAD_PARAM_STREAM_MISMATCH`) destroys only that child's CUDA
+context, so it cannot poison the next run. The parent then frees GPU memory, waits
+30 s and retries the run from its `last.pt`, up to **three** times; a run that still
+fails is logged, marked failed, and the grid continues with the next run and prints a
+done/skipped/failed summary at the end (`logs/cvc_unet_grid_summary.json`). Child
+exit codes: `0` success, `2` configuration error, `3` CUDA/cuDNN (retryable), `4`
+anything else.
 
 ```bash
 python scripts/run_grid.py --config configs/cvc_clinicdb/unet_resnet50.yaml \
@@ -370,7 +379,10 @@ RNG round-trip, epoch continuation, per-run directories), grid state classificat
 seed 0), probability-map selection, per-fold dataset statistics, pooled seed tables,
 seed-averaged paired tests, the seed ensemble and 2D SwinUNETR forward passes, and
 colour loading of the real TIFFs (3 distinct channels, native `288x384`, mask
-binarisation at 127).
+binarisation at 127). Grid robustness is covered too: a child process per run, the
+CUDA-vs-other failure classification, retries with GPU cleanup, exhausted retries
+being reported instead of raised, and `run_one.py` training then reporting
+"nothing to do" end-to-end.
 
 ## Status / next steps
 
