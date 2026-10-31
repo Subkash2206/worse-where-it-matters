@@ -18,6 +18,8 @@ number.
 | Hand-written inverse transforms per view | inverses are derived (flip is self-inverse, `rot90(k)⁻¹ = rot90(-k)`, composition reverses order); every view in the shipped configs is round-trip tested |
 | Silent/penalised empty masks | default `empty_policy: nan` plus an explicit `empty_flag` column (`both_nonempty`, `both_empty`, `pred_empty`, `gt_empty`); `penalize` remains available for a sensitivity table only |
 | No uncertainty or cost analysis | per-view probability maps give entropy/variance (global and foreground+3-px band), view disagreement and per-view Dice vs consensus; per-case latency (3 warm-ups, CUDA synchronised) and peak GPU memory |
+| Pretrained encoders fed raw `[0, 1]` images (no ImageNet normalization — the old repo did this too) | `dataset.normalization.kind: imagenet` resolves the encoder's own mean/std from `smp.encoders.get_preprocessing_params`; applied in the dataset, tested against a hand-computed normalization |
+| Distance metrics silently ignored missed lesions | paired distance metrics use only cases non-empty **under both methods** (`n_cases_used` reported); a missed-detection table (rate + cluster-bootstrap CI + exact McNemar transitions) and an all-cases penalised sensitivity table are written by `run_stats.py` |
 | Hardcoded paths, seeds, device, hyper-parameters | everything is in `configs/*.yaml`; `device: auto`; only YAML is authoritative |
 
 ## Layout
@@ -143,6 +145,26 @@ counts as background. Empty masks are never silently dropped: the default
 `penalize` (image diagonal / boundary F1 = 0) is reserved for the sensitivity
 table.
 
+## Input normalization
+
+Images are loaded into `[0, 1]` and then normalized with the encoder's own
+preprocessing statistics (`configs/base.yaml` → `dataset.normalization`):
+
+```yaml
+dataset:
+  normalization:
+    kind: imagenet     # imagenet | custom | none
+    mean: null         # optional override
+    std: null
+```
+
+With `kind: imagenet` the mean/std are read from
+`smp.encoders.get_preprocessing_params(model.encoder, model.encoder_weights)` at
+dataset build time (ResNet-50 → `mean=(0.485, 0.456, 0.406)`,
+`std=(0.229, 0.224, 0.225)`), and `custom` accepts explicit values. The metadata
+JSON records the resolved statistics, and a test compares a dataset sample with a
+hand-computed normalization to prevent a silent regression.
+
 ## Per-view uncertainty and cost
 
 The runner keeps the individual view probabilities (after inverse transforms and
@@ -161,6 +183,24 @@ resampling onto the native grid) and writes, per case and method:
 
 `evaluation.save_probability_maps: true` additionally writes float16 mean and
 variance maps (`*.npy`, ignored by git) to `evaluation.probability_map_dir`.
+
+## Missed detection and empty-mask handling
+
+An empty prediction on a frame that contains a lesion is recorded explicitly:
+
+* per-case CSV columns `empty_flag` (`both_nonempty`, `pred_empty`, `gt_empty`,
+  `both_empty`) and `missed_detection` (1 when `pred_empty` with a non-empty GT);
+* `run_stats.py` writes `detection_<unit>.csv` with each method's missed-detection
+  rate, a **cluster (video-level) bootstrap CI**, the transition counts
+  (`nonempty -> empty`, `empty -> nonempty`) against the baseline and an **exact
+  McNemar test** (Holm-corrected);
+* the primary paired comparison of `hd`, `hd95`, `hd95_pooled` and `assd` uses only
+  cases that are non-empty **under both methods** — otherwise a method that misses
+  lesions would drop those cases and be rewarded with a lower distance
+  (`n_cases_used` and `restriction` are reported per comparison);
+* `sensitivity_<treatment>_vs_<control>_<unit>.csv` repeats the comparison on all
+  cases using the `<metric>_penalized` columns (empty prediction → image diagonal),
+  which the runner emits when `evaluation.emit_penalized_metrics: true` (default).
 
 ## TTA views
 

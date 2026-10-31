@@ -29,7 +29,13 @@ if str(_REPO_ROOT / "src") not in sys.path:
 
 from melba.config import ConfigError, load_config, parse_set_args  # noqa: E402
 from melba.eval.records import read_long_csv  # noqa: E402
-from melba.stats import analyze_long, analyze_pooled_folds  # noqa: E402
+from melba.stats import (  # noqa: E402
+    analyze_detection,
+    analyze_long,
+    analyze_pooled_folds,
+    analyze_sensitivity,
+    pool_folds,
+)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -87,14 +93,39 @@ def main(argv: list[str] | None = None) -> int:
     try:
         frames = [read_long_csv(path) for path in args.per_case]
         pooled = len(frames) > 1
+        combined = pool_folds(frames) if pooled else frames[0]
         if pooled:
             table = analyze_pooled_folds(frames, **analysis_kwargs)
         else:
-            table = analyze_long(frames[0], **analysis_kwargs)
+            table = analyze_long(combined, **analysis_kwargs)
+        detection = analyze_detection(
+            combined,
+            control=args.control,
+            unit=unit,
+            n_bootstrap=int(stats_config.get("n_bootstrap", 10000)),
+            ci=float(stats_config.get("ci", 0.95)),
+            seed=int(stats_config.get("bootstrap_seed", 0)),
+            correction=str(stats_config.get("correction", "holm")),
+        )
+        try:
+            sensitivity = analyze_sensitivity(
+                combined,
+                treatment=args.treatment,
+                control=args.control,
+                unit=unit,
+                n_bootstrap=int(stats_config.get("n_bootstrap", 10000)),
+                ci=float(stats_config.get("ci", 0.95)),
+                seed=int(stats_config.get("bootstrap_seed", 0)),
+                correction=str(stats_config.get("correction", "holm")),
+            )
+        except ValueError as error:
+            print(f"WARNING: sensitivity table skipped: {error}", file=sys.stderr)
+            sensitivity = None
     except (ValueError, KeyError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
 
+    prefix = "pooled_" if pooled else ""
     if args.output:
         output_path = Path(args.output)
         if not output_path.is_absolute():
@@ -104,14 +135,24 @@ def main(argv: list[str] | None = None) -> int:
         base = stats_config.get("output_dir", "results/stats")
         output_dir = config.resolve(base) if config is not None else _REPO_ROOT / str(base)
         output_dir.mkdir(parents=True, exist_ok=True)
-        prefix = "pooled_" if pooled else ""
         output_path = output_dir / f"{prefix}{args.treatment}_vs_{args.control}_{unit}.csv"
     table.to_csv(output_path, index=False)
+
+    detection_path = output_path.with_name(f"{prefix}detection_{unit}.csv")
+    detection.to_csv(detection_path, index=False)
+    sensitivity_path = None
+    if sensitivity is not None:
+        sensitivity_path = output_path.with_name(
+            f"{prefix}sensitivity_{args.treatment}_vs_{args.control}_{unit}.csv"
+        )
+        sensitivity.to_csv(sensitivity_path, index=False)
 
     display = table[
         [
             "metric",
             "n_units",
+            "n_cases_used",
+            "restriction",
             "delta_mean",
             "ci_low",
             "ci_high",
@@ -129,9 +170,39 @@ def main(argv: list[str] | None = None) -> int:
             f"{int(table['n_groups_pooled'].iloc[0])} videos, "
             f"{int(table['n_cases_pooled'].iloc[0])} cases"
         )
-    print(f"primary test: {table['test'].iloc[0]} (paired t-test kept as secondary column)")
+    print("primary test: Wilcoxon signed-rank; distance metrics use cases non-empty "
+          "under BOTH methods (n_cases_used); paired t-test kept as secondary column")
     print(display.to_string(index=False, float_format=lambda value: f"{value:.4f}"))
+
+    print("\nmissed detection (empty prediction on a non-empty reference):")
+    print(
+        detection[
+            [
+                "method",
+                "n_cases",
+                "n_missed",
+                "missed_rate",
+                "ci_low",
+                "ci_high",
+                "nonempty_to_empty",
+                "empty_to_nonempty",
+                "mcnemar_p",
+                "mcnemar_p_adjusted",
+            ]
+        ].to_string(index=False, float_format=lambda value: f"{value:.4f}")
+    )
+    if sensitivity is not None:
+        print("\nsensitivity: all cases, empty predictions penalised (image diagonal):")
+        print(
+            sensitivity[
+                ["metric", "n_units", "n_cases_used", "delta_mean", "p_value", "preferred"]
+            ].to_string(index=False, float_format=lambda value: f"{value:.4f}")
+        )
+
     print(f"\nwritten to {output_path}")
+    print(f"detection table: {detection_path}")
+    if sensitivity_path is not None:
+        print(f"sensitivity table: {sensitivity_path}")
     return 0
 
 

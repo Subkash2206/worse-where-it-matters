@@ -11,7 +11,13 @@ import torch
 from torch import nn
 
 from melba.config import ConfigError
-from melba.data import SplitError, build_dataset, read_split_csv
+from melba.data import (
+    IMAGENET_MEAN,
+    IMAGENET_STD,
+    SplitError,
+    build_dataset,
+    read_split_csv,
+)
 from melba.eval import evaluate, read_long_csv
 from melba.eval.runner import resample_probability_map
 
@@ -72,7 +78,13 @@ def test_dataset_items(eval_config) -> None:
     sample = dataset[0]
     assert sample["image"].shape == (3, 64, 64)
     assert sample["image"].dtype == torch.float32
-    assert float(sample["image"].min()) >= 0.0 and float(sample["image"].max()) <= 1.0
+    # images are ImageNet-normalized for the pretrained encoder
+    assert sample["normalization"] == "imagenet"
+    mean = np.asarray(IMAGENET_MEAN, dtype=np.float32)
+    std = np.asarray(IMAGENET_STD, dtype=np.float32)
+    assert float(sample["image"].min()) >= float(((0.0 - mean) / std).min()) - 1e-5
+    assert float(sample["image"].max()) <= float(((1.0 - mean) / std).max()) + 1e-5
+    assert torch.isfinite(sample["image"]).all()
     assert sample["mask"].shape == (1, 64, 64)
     assert set(torch.unique(sample["mask"]).tolist()) <= {0.0, 1.0}
     # evaluation keeps the native mask so metrics are computed on the native grid
@@ -114,11 +126,13 @@ def test_evaluation_writes_long_format(eval_config, tmp_path) -> None:
     frame = read_long_csv(result.per_case_csv)
 
     gt_metrics = {"dice", "hd95", "assd", "boundary_f1"}
+    penalized_metrics = {"hd95_penalized", "assd_penalized"}
     timing_metrics = {"latency_ms", "peak_memory_mb"}
-    assert set(frame["metric"]) == gt_metrics | timing_metrics
+    expected_metrics = gt_metrics | penalized_metrics | timing_metrics
+    assert set(frame["metric"]) == expected_metrics
     assert frame["method"].nunique() == 4
     assert frame["case_id"].nunique() == 2
-    assert len(frame) == 2 * 4 * len(gt_metrics | timing_metrics)
+    assert len(frame) == 2 * 4 * len(expected_metrics)
     assert set(frame["split"]) == {"test"}
     assert set(frame["fold"]) == {0}
     assert (frame["spacing_mm"] == "1,1").all()
@@ -131,6 +145,7 @@ def test_evaluation_writes_long_format(eval_config, tmp_path) -> None:
         "pred_empty",
         "gt_empty",
     }
+    assert set(frame["missed_detection"].unique()) <= {0, 1}
     # one row per case/method/metric combination, never an aggregate row
     assert frame.groupby(["case_id", "method", "metric"]).size().max() == 1
     assert (frame.loc[frame["metric"] == "latency_ms", "value"] > 0).all()
@@ -150,6 +165,8 @@ def test_evaluation_writes_long_format(eval_config, tmp_path) -> None:
     assert "environment" in metadata and "git_revision" in metadata
     assert metadata["metrics"]["empty_policy"] == "nan"
     assert metadata["timing"]["warmup_runs"] == 3
+    assert metadata["penalized_metrics"]["emitted"] is True
+    assert metadata["normalization"]["kind"] == "imagenet"
     assert [method["name"] for method in metadata["methods"]] == [
         "baseline",
         "tta2",
@@ -320,6 +337,24 @@ def test_probability_maps_can_be_saved_as_float16(eval_config, tmp_path) -> None
     saved = np.load(files[0])
     assert saved.dtype == np.float16
     assert saved.shape == (40, 56)  # native grid, not the 64x64 network grid
+
+
+def test_penalized_metrics_flag_missed_detections(eval_config, tmp_path) -> None:
+    config = eval_config.with_overrides({"metrics.names": ["hd95", "assd"]})
+    result = evaluate(
+        config, model=ZeroModel(), limit=1, output_dir=tmp_path / "penalty", progress=False
+    )
+    frame = read_long_csv(result.per_case_csv)
+
+    assert set(frame["empty_flag"]) == {"pred_empty"}
+    assert (frame["missed_detection"] == 1).all()
+    for metric in ("hd95", "assd"):
+        raw = frame.loc[frame["metric"] == metric, "value"]
+        penalised = frame.loc[frame["metric"] == f"{metric}_penalized", "value"]
+        assert raw.isna().all()  # empty prediction -> undefined under `nan`
+        assert np.allclose(penalised, float(np.hypot(39, 55)), rtol=1e-6)
+    dice_like = frame.loc[frame["metric"] == "hd95", "value"]
+    assert dice_like.isna().all()
 
 
 def test_resample_probability_map() -> None:

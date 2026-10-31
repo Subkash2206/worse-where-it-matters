@@ -11,6 +11,7 @@ import pytest
 from melba.stats import (
     analyze_long,
     analyze_pooled_folds,
+    analyze_sensitivity,
     bootstrap_ci_mean,
     holm_adjust,
     paired_comparison,
@@ -18,6 +19,15 @@ from melba.stats import (
     pool_folds,
     rank_biserial,
 )
+
+
+def test_metric_directions() -> None:
+    from melba.stats import metric_direction
+
+    for metric in ("dice", "jaccard", "precision", "recall", "boundary_f1"):
+        assert metric_direction(metric) == "higher"
+    for metric in ("hd", "hd95", "hd95_pooled", "assd", "hd95_penalized"):
+        assert metric_direction(metric) == "lower"
 
 
 def test_rank_biserial_known_values() -> None:
@@ -105,6 +115,7 @@ def _long_frame(groups: int = 6, cases_per_group: int = 2) -> pd.DataFrame:
                         "method": "baseline",
                         "metric": "dice",
                         "value": 0.50 + group * 0.01,
+                        "empty_flag": "both_nonempty",
                     },
                     {
                         "case_id": case_id,
@@ -112,6 +123,7 @@ def _long_frame(groups: int = 6, cases_per_group: int = 2) -> pd.DataFrame:
                         "method": "tta8",
                         "metric": "dice",
                         "value": 0.60 + group * 0.01,
+                        "empty_flag": "both_nonempty",
                     },
                     {
                         "case_id": case_id,
@@ -119,6 +131,7 @@ def _long_frame(groups: int = 6, cases_per_group: int = 2) -> pd.DataFrame:
                         "method": "baseline",
                         "metric": "hd95",
                         "value": 5.0 + group * 0.1,
+                        "empty_flag": "both_nonempty",
                     },
                     {
                         "case_id": case_id,
@@ -126,6 +139,7 @@ def _long_frame(groups: int = 6, cases_per_group: int = 2) -> pd.DataFrame:
                         "method": "tta8",
                         "metric": "hd95",
                         "value": 4.0 + group * 0.1,
+                        "empty_flag": "both_nonempty",
                     },
                 ]
             )
@@ -187,6 +201,101 @@ def test_analyze_long_with_no_correction() -> None:
     np.testing.assert_allclose(table["p_value_adjusted"], table["p_value"])
 
 
+def _empty_case_frame() -> pd.DataFrame:
+    """Four cases: one mutual agreement, one missed by the treatment, one missed by
+    the baseline, one agreement; distance values are NaN where the mask is empty."""
+    spec = [
+        # case, group, baseline_flag, baseline_hd95, treatment_flag, treatment_hd95
+        ("c1", "v1", "both_nonempty", 10.0, "both_nonempty", 8.0),
+        ("c2", "v1", "both_nonempty", 12.0, "pred_empty", float("nan")),
+        ("c3", "v2", "pred_empty", float("nan"), "both_nonempty", 9.0),
+        ("c4", "v2", "both_nonempty", 10.0, "both_nonempty", 9.0),
+    ]
+    rows = []
+    for case, group, base_flag, base_value, treat_flag, treat_value in spec:
+        for method, flag, value in (
+            ("baseline", base_flag, base_value),
+            ("tta8", treat_flag, treat_value),
+        ):
+            diagonal = 20.0
+            rows.append(
+                {
+                    "case_id": case,
+                    "group_id": group,
+                    "method": method,
+                    "metric": "hd95",
+                    "value": value,
+                    "empty_flag": flag,
+                    "missed_detection": int(flag == "pred_empty"),
+                }
+            )
+            rows.append(
+                {
+                    "case_id": case,
+                    "group_id": group,
+                    "method": method,
+                    "metric": "hd95_penalized",
+                    "value": diagonal if value is None or np.isnan(value) else value,
+                    "empty_flag": flag,
+                    "missed_detection": int(flag == "pred_empty"),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def test_distance_metrics_use_only_both_nonempty_cases() -> None:
+    frame = _empty_case_frame()
+    pairs = paired_values(frame, "hd95", treatment="tta8", control="baseline", unit="case")
+    assert len(pairs) == 2  # c2 (treatment empty) and c3 (baseline empty) excluded
+
+    pairs = paired_values(
+        frame,
+        "hd95",
+        treatment="tta8",
+        control="baseline",
+        unit="case",
+        require_both_nonempty=True,
+    )
+    assert pairs["unit_id"].tolist() == ["c1", "c4"]
+
+    table = analyze_long(frame, treatment="tta8", unit="case", n_bootstrap=100)
+    row = table.set_index("metric").loc["hd95"]
+    assert row["restriction"] == "both_nonempty"
+    assert row["n_cases_used"] == 2
+    assert row["n_units"] == 2
+    assert row["n_pairs"] == 2
+
+    unrestricted = analyze_long(
+        frame, treatment="tta8", unit="case", n_bootstrap=100, distance_restriction="all"
+    ).set_index("metric").loc["hd95"]
+    assert unrestricted["restriction"] == "all_cases"
+
+    with pytest.raises(ValueError, match="distance_restriction"):
+        analyze_long(frame, treatment="tta8", distance_restriction="patient")
+
+
+def test_sensitivity_uses_penalized_values_for_all_cases() -> None:
+    frame = _empty_case_frame()
+    table = analyze_sensitivity(
+        frame, treatment="tta8", control="baseline", unit="case", n_bootstrap=100
+    )
+    row = table.set_index("metric").loc["hd95"]
+    assert table["variant"].unique().tolist() == ["penalized_all_cases"]
+    assert row["restriction"] == "all_cases_penalized"
+    assert row["n_cases_used"] == 4
+    assert row["n_units"] == 4
+    # penalised empty predictions are 20.0, so the treatment mean includes them
+    assert row["delta_mean"] == pytest.approx(
+        np.mean([8.0, 20.0, 9.0, 9.0]) - np.mean([10.0, 12.0, 20.0, 10.0])
+    )
+
+    without_penalized = frame[~frame["metric"].str.endswith("_penalized")]
+    with pytest.raises(ValueError, match="penalised"):
+        analyze_sensitivity(
+            without_penalized, treatment="tta8", control="baseline", unit="case"
+        )
+
+
 def _pooled_frames(videos: int = 10, cases_per_video: int = 2, n_folds: int = 5):
     rows = []
     for video in range(videos):
@@ -197,10 +306,10 @@ def _pooled_frames(videos: int = 10, cases_per_video: int = 2, n_folds: int = 5)
             base_dice = 0.50 + 0.01 * video
             rows.extend(
                 [
-                    {"fold": fold, "case_id": case_id, "group_id": group_id, "method": "baseline", "metric": "dice", "value": base_dice},
-                    {"fold": fold, "case_id": case_id, "group_id": group_id, "method": "tta8", "metric": "dice", "value": base_dice + 0.10},
-                    {"fold": fold, "case_id": case_id, "group_id": group_id, "method": "baseline", "metric": "hd95", "value": 5.0 + 0.01 * video},
-                    {"fold": fold, "case_id": case_id, "group_id": group_id, "method": "tta8", "metric": "hd95", "value": 4.0 + 0.01 * video},
+                    {"fold": fold, "case_id": case_id, "group_id": group_id, "method": "baseline", "metric": "dice", "value": base_dice, "empty_flag": "both_nonempty"},
+                    {"fold": fold, "case_id": case_id, "group_id": group_id, "method": "tta8", "metric": "dice", "value": base_dice + 0.10, "empty_flag": "both_nonempty"},
+                    {"fold": fold, "case_id": case_id, "group_id": group_id, "method": "baseline", "metric": "hd95", "value": 5.0 + 0.01 * video, "empty_flag": "both_nonempty"},
+                    {"fold": fold, "case_id": case_id, "group_id": group_id, "method": "tta8", "metric": "hd95", "value": 4.0 + 0.01 * video, "empty_flag": "both_nonempty"},
                 ]
             )
     frame = pd.DataFrame(rows)

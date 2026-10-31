@@ -14,6 +14,7 @@ Two scientific guards are enforced here:
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -31,7 +32,12 @@ from melba.inference import (
     methods_from_config,
     predict_per_view,
 )
-from melba.metrics import MetricSettings, compute_case_metrics, compute_view_uncertainty
+from melba.metrics import (
+    MetricSettings,
+    compute_case_metrics,
+    compute_view_uncertainty,
+    grid_diagonal_mm,
+)
 from melba.models import build_model, checkpoint_sha256, load_checkpoint
 from melba.utils import describe_device, environment_info, get_device, seed_everything
 from melba.utils.provenance import git_revision
@@ -49,6 +55,10 @@ __all__ = ["EvaluationResult", "evaluate", "run_evaluation", "TIMING_METRICS"]
 
 #: per-case cost descriptors written next to the quality metrics
 TIMING_METRICS: tuple[str, ...] = ("latency_ms", "peak_memory_mb")
+
+#: distance metrics for which a penalised variant (empty prediction -> image
+#: diagonal) is written as ``<metric>_penalized`` for the sensitivity table
+PENALIZED_SOURCE_METRICS: tuple[str, ...] = ("hd", "hd95", "hd95_pooled", "assd")
 
 
 @dataclass(frozen=True)
@@ -265,6 +275,7 @@ def run_evaluation(
     if save_maps:
         map_dir.mkdir(parents=True, exist_ok=True)
     boundary_band_px = int(config.get("evaluation.uncertainty_boundary_band_px", 3))
+    emit_penalized = bool(config.get("evaluation.emit_penalized_metrics", True))
 
     show_progress = bool(config.get("runtime.progress", True)) if progress is None else progress
     total_cases = len(dataset)
@@ -344,6 +355,16 @@ def run_evaluation(
                 )
                 values["latency_ms"] = latency_ms
                 values["peak_memory_mb"] = peak_memory_mb
+                # Sensitivity values: the same distance metrics with an empty
+                # prediction penalised by the image diagonal (all cases, no NaN).
+                if emit_penalized:
+                    diagonal = grid_diagonal_mm(target.shape, spacing)
+                    for name in PENALIZED_SOURCE_METRICS:
+                        if name in values:
+                            value = values[name]
+                            values[f"{name}_penalized"] = (
+                                diagonal if math.isnan(value) else value
+                            )
 
                 provenance = {
                     "run_id": run_id,
@@ -364,6 +385,7 @@ def run_evaluation(
                     "case_id": case_id,
                     "group_id": group_id,
                     "empty_flag": metrics["empty_flag"],
+                    "missed_detection": int(metrics["empty_flag"] == "pred_empty"),
                 }
                 for metric_name, value in values.items():
                     writer.write({**provenance, "metric": metric_name, "value": value})
@@ -404,6 +426,7 @@ def run_evaluation(
         warmup_runs=warmup_runs,
         save_maps=save_maps,
         map_dir=map_dir,
+        emit_penalized=emit_penalized,
     )
 
 
@@ -436,6 +459,7 @@ def _finalise(
     warmup_runs: int = 0,
     save_maps: bool = False,
     map_dir: Path | None = None,
+    emit_penalized: bool = True,
 ) -> EvaluationResult:
     """Write the summary and provenance files, then return the run description."""
     frame = read_long_csv(per_case_csv)
@@ -477,6 +501,11 @@ def _finalise(
             "dtype": "float16" if save_maps else None,
         },
         "metrics": asdict(metric_settings),
+        "normalization": config.get("dataset.normalization"),
+        "penalized_metrics": {
+            "emitted": emit_penalized,
+            "source_metrics": list(PENALIZED_SOURCE_METRICS),
+        },
         "methods": [
             {
                 "name": method.name,

@@ -52,6 +52,7 @@ RESULT_COLUMNS: tuple[str, ...] = (
     "case_id",
     "group_id",
     "empty_flag",
+    "missed_detection",
     "metric",
     "value",
 )

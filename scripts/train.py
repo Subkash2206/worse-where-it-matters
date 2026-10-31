@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import csv
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -215,12 +216,18 @@ def main(argv: list[str] | None = None) -> int:
     for epoch in iterator:
         if hasattr(train_dataset, "set_epoch"):
             train_dataset.set_epoch(epoch)
+        epoch_started = time.perf_counter()
         train_loss = train_one_epoch(
             model, train_loader, optimizer, loss_function, scaler, device, use_amp
         )
+        trained_at = time.perf_counter()
         val_loss, val_dice = validate(
             model, val_loader, loss_function, device, use_amp, threshold
         )
+        validated_at = time.perf_counter()
+        train_seconds = trained_at - epoch_started
+        val_seconds = validated_at - trained_at
+        epoch_seconds = validated_at - epoch_started
         if scheduler is not None:
             scheduler.step()
 
@@ -257,11 +264,16 @@ def main(argv: list[str] | None = None) -> int:
             "monitor": monitor,
             "improved": improved,
             "epochs_without_improvement": epochs_without_improvement,
+            "train_seconds": train_seconds,
+            "val_seconds": val_seconds,
+            "epoch_seconds": epoch_seconds,
         }
         history.append(row)
         print(
             f"epoch {epoch + 1:03d}/{epochs}: train_loss={train_loss:.4f} "
-            f"val_loss={val_loss:.4f} val_dice={val_dice:.4f}" + (" *" if improved else "")
+            f"val_loss={val_loss:.4f} val_dice={val_dice:.4f} "
+            f"({epoch_seconds:.1f}s: train {train_seconds:.1f}s / val {val_seconds:.1f}s)"
+            + (" *" if improved else "")
         )
 
         if patience and epochs_without_improvement >= patience:

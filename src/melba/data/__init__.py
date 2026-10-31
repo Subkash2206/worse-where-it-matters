@@ -28,6 +28,7 @@ from .cvc_mapping import (
     validate_sequence_mapping,
     write_mapping_csv,
 )
+from .normalization import IMAGENET_MEAN, IMAGENET_STD, NORMALIZATION_KINDS, NormalizationSpec
 from .splits import (
     SPLITS,
     SplitError,
@@ -50,6 +51,10 @@ from .splits import (
 
 __all__ = [
     "AUGMENTATION_GROUPS",
+    "IMAGENET_MEAN",
+    "IMAGENET_STD",
+    "NORMALIZATION_KINDS",
+    "NormalizationSpec",
     "SPLITS",
     "AugmentationConfig",
     "CVCDataset",
@@ -140,6 +145,7 @@ def build_dataset(
             image_size=config.require("dataset.image_size"),
             mask_threshold=int(config.get("dataset.mask_threshold", 127)),
             spacing=config.require("dataset.spacing_mm"),
+            normalization=NormalizationSpec.from_config(config),
             augmentation=augmentation,
             seed=int(config.require("seed")),
             fold=resolved_fold,

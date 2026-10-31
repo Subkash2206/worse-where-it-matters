@@ -27,6 +27,11 @@ dataset:
   # pixels.  Set this to real millimetres if a calibrated subset is used.
   spacing_mm: [1.0, 1.0]
 
+  # ImageNet-pretrained ResNet-50 requires ImageNet normalization; the mean/std are
+  # resolved from the encoder (smp.encoders.get_preprocessing_params) at build time.
+  normalization:
+    kind: imagenet
+
   split:
     strategy: group_map           # group_map | contiguous_blocks (proxy only)
     group_map_file: data/splits/cvc_clinicdb_frame_groups.csv

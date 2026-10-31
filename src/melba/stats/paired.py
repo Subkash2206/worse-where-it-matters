@@ -148,38 +148,47 @@ METRIC_DIRECTIONS: dict[str, str] = {
     "boundary_f1": "higher",
     "hd": "lower",
     "hd95": "lower",
+    "hd95_pooled": "lower",
     "assd": "lower",
 }
 
 
 def metric_direction(metric: str) -> str:
-    return METRIC_DIRECTIONS.get(str(metric), "higher")
+    return METRIC_DIRECTIONS.get(str(metric).replace("_penalized", ""), "higher")
 
 
-def paired_values(
+#: distance metrics whose primary paired comparison is restricted to cases that are
+#: non-empty under both methods (see :func:`paired_values`)
+DISTANCE_RESTRICTED_METRICS: tuple[str, ...] = ("hd", "hd95", "hd95_pooled", "assd")
+
+
+def _preferred_method(delta: float, direction: str, treatment: str, control: str) -> str:
+    if not math.isfinite(delta) or abs(delta) < 1e-12:
+        return "tie"
+    return treatment if (delta > 0) == (direction == "higher") else control
+
+
+def _paired_frame(
     frame: pd.DataFrame,
     metric: str,
     treatment: str,
     control: str,
     *,
-    unit: str = "group",
-) -> pd.DataFrame:
-    """Return complete pairs ``(unit_id, control, treatment)`` for one metric.
-
-    With ``unit="group"`` each case's value is averaged within its group before
-    pairing, so the test's sample size is the number of videos/patients rather than
-    the number of (near-duplicate) frames.
-    """
-    required = {"case_id", "method", "metric", "value"}
+    unit: str,
+    require_both_nonempty: bool,
+) -> tuple[pd.DataFrame, int]:
+    """Build the paired frame and count the cases that contributed to it."""
+    required = {"case_id", "group_id", "method", "metric", "value"}
     missing = sorted(required - set(frame.columns))
     if missing:
         raise ValueError(f"Long-format frame is missing column(s) {missing}")
-
     if unit not in {"case", "group"}:
         raise ValueError(f"unit must be 'case' or 'group', got {unit!r}")
     key = "case_id" if unit == "case" else "group_id"
-    if key not in frame.columns:
-        raise ValueError(f"unit={unit!r} requires the column '{key}'")
+    if require_both_nonempty and "empty_flag" not in frame.columns:
+        raise ValueError(
+            "require_both_nonempty needs an 'empty_flag' column in the long-format frame"
+        )
 
     subset = frame.loc[frame["metric"] == metric]
     if subset.empty:
@@ -192,12 +201,21 @@ def paired_values(
                 f"available: {sorted(available)}"
             )
 
-    values = subset.loc[subset["method"].isin([control, treatment]), [key, "method", "value"]].copy()
-    values["value"] = values["value"].astype(float)
-    values = values[np.isfinite(values["value"])]
+    columns = ["case_id", key, "method", "value"]
+    if "empty_flag" in frame.columns:
+        columns.append("empty_flag")
+    base = subset.loc[subset["method"].isin([control, treatment]), list(dict.fromkeys(columns))].copy()
+    base["value"] = base["value"].astype(float)
+    base = base[np.isfinite(base["value"])]
+    if require_both_nonempty:
+        base = base[base["empty_flag"] == "both_nonempty"]
+
+    paired_cases = base.groupby("case_id")["method"].nunique()
+    n_cases_used = int((paired_cases == 2).sum())
+
+    values = base[[key, "method", "value"]]
     if unit == "group":
         values = values.groupby([key, "method"], as_index=False)["value"].mean()
-
     pivot = (
         values.pivot(index=key, columns="method", values="value")
         .dropna(subset=[control, treatment])
@@ -207,7 +225,39 @@ def paired_values(
     ordered = pivot.sort_values(
         "unit_id", key=lambda column: column.astype(str)
     ).reset_index(drop=True)
-    return ordered[["unit_id", control, treatment]]
+    return ordered[["unit_id", control, treatment]], n_cases_used
+
+
+def paired_values(
+    frame: pd.DataFrame,
+    metric: str,
+    treatment: str,
+    control: str,
+    *,
+    unit: str = "group",
+    require_both_nonempty: bool = False,
+) -> pd.DataFrame:
+    """Return complete pairs ``(unit_id, control, treatment)`` for one metric.
+
+    With ``unit="group"`` each case's value is averaged within its group before
+    pairing, so the test's sample size is the number of videos/patients rather than
+    the number of (near-duplicate) frames.
+
+    With ``require_both_nonempty=True`` a case enters the comparison only when the
+    reference is non-empty **and both methods** predicted a non-empty mask.  This is
+    required for distance metrics: under ``empty_policy: nan`` an empty prediction
+    would otherwise drop out of the mean, so a method that misses lesions would be
+    rewarded with a lower HD95/ASSD (survivorship bias).
+    """
+    pairs, _ = _paired_frame(
+        frame,
+        metric,
+        treatment,
+        control,
+        unit=unit,
+        require_both_nonempty=require_both_nonempty,
+    )
+    return pairs
 
 
 def paired_comparison(
@@ -293,13 +343,24 @@ def analyze_long(
     ci: float = 0.95,
     seed: int = 0,
     correction: str = "holm",
+    distance_restriction: str = "both_nonempty",
 ) -> pd.DataFrame:
     """Run the paired analysis for every metric and return a long-format table.
 
     Positive ``delta_mean`` always means ``treatment - control``; the ``preferred``
     column translates that into "which method is better" using the metric's
     direction.  ``p_value_adjusted`` is the Holm-corrected primary p-value.
+
+    ``distance_restriction="both_nonempty"`` (default) restricts distance metrics
+    (``hd``, ``hd95``, ``hd95_pooled``, ``assd``) to cases that are non-empty under
+    both methods, so a missed lesion cannot silently buy a better distance.  The
+    number of contributing cases is reported as ``n_cases_used`` per comparison;
+    use :func:`analyze_sensitivity` for the all-cases penalised variant.
     """
+    if distance_restriction not in {"both_nonempty", "all"}:
+        raise ValueError(
+            f"distance_restriction must be 'both_nonempty' or 'all', got {distance_restriction!r}"
+        )
     if metrics is None:
         metrics = sorted(frame["metric"].dropna().unique())
     metrics = list(metrics)
@@ -308,7 +369,17 @@ def analyze_long(
 
     rows: list[dict[str, Any]] = []
     for metric in metrics:
-        pairs = paired_values(frame, metric, treatment, control, unit=unit)
+        restrict = (
+            metric in DISTANCE_RESTRICTED_METRICS and distance_restriction == "both_nonempty"
+        )
+        pairs, n_cases_used = _paired_frame(
+            frame,
+            metric,
+            treatment,
+            control,
+            unit=unit,
+            require_both_nonempty=restrict,
+        )
         row = paired_comparison(
             pairs[control],
             pairs[treatment],
@@ -318,14 +389,7 @@ def analyze_long(
             ci=ci,
             seed=seed,
         )
-        delta = row["delta_mean"]
         direction = metric_direction(metric)
-        if not math.isfinite(delta) or abs(delta) < 1e-12:
-            preferred = "tie"
-        elif (delta > 0) == (direction == "higher"):
-            preferred = treatment
-        else:
-            preferred = control
         row.update(
             {
                 "metric": metric,
@@ -334,7 +398,9 @@ def analyze_long(
                 "control": control,
                 "unit": unit,
                 "n_units": int(len(pairs)),
-                "preferred": preferred,
+                "restriction": "both_nonempty" if restrict else "all_cases",
+                "n_cases_used": int(n_cases_used),
+                "preferred": _preferred_method(row["delta_mean"], direction, treatment, control),
             }
         )
         rows.append(row)
@@ -354,6 +420,8 @@ def analyze_long(
         "control",
         "unit",
         "n_units",
+        "restriction",
+        "n_cases_used",
         "n_pairs",
         "n_dropped",
         "mean_control",
@@ -375,6 +443,71 @@ def analyze_long(
         "secondary_test",
     ]
     return result[column_order]
+
+
+def analyze_sensitivity(
+    frame: pd.DataFrame,
+    *,
+    treatment: str,
+    control: str = "baseline",
+    metrics: Sequence[str] | None = None,
+    unit: str = "group",
+    primary_test: str = "wilcoxon",
+    alternative: str = "two-sided",
+    n_bootstrap: int = 10000,
+    ci: float = 0.95,
+    seed: int = 0,
+    correction: str = "holm",
+) -> pd.DataFrame:
+    """All-cases comparison of distance metrics with empty predictions penalised.
+
+    Uses the ``<metric>_penalized`` columns written by the evaluation runner (empty
+    prediction -> image diagonal), so no case is dropped.  This is the secondary
+    sensitivity analysis next to the primary both-non-empty comparison.
+    """
+    available = set(frame["metric"].dropna().unique())
+    if metrics is None:
+        metrics = [
+            metric
+            for metric in DISTANCE_RESTRICTED_METRICS
+            if f"{metric}_penalized" in available
+        ]
+        if not metrics:
+            raise ValueError(
+                "Frame contains no penalised distance metrics; re-run evaluation with "
+                "evaluation.emit_penalized_metrics: true"
+            )
+    penalized_metrics = [f"{metric}_penalized" for metric in metrics]
+    missing = [metric for metric in penalized_metrics if metric not in available]
+    if missing:
+        raise ValueError(
+            f"Missing penalised metric(s) {missing}; re-run evaluation with "
+            "evaluation.emit_penalized_metrics: true"
+        )
+
+    table = analyze_long(
+        frame,
+        treatment=treatment,
+        control=control,
+        metrics=penalized_metrics,
+        unit=unit,
+        primary_test=primary_test,
+        alternative=alternative,
+        n_bootstrap=n_bootstrap,
+        ci=ci,
+        seed=seed,
+        correction=correction,
+        distance_restriction="all",
+    )
+    table["metric"] = table["metric"].str.replace("_penalized", "", regex=False)
+    table["metric_direction"] = table["metric"].map(metric_direction)
+    table["preferred"] = [
+        _preferred_method(delta, direction, treatment, control)
+        for delta, direction in zip(table["delta_mean"], table["metric_direction"])
+    ]
+    table["variant"] = "penalized_all_cases"
+    table["restriction"] = "all_cases_penalized"
+    return table
 
 
 def pool_folds(

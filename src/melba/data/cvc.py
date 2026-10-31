@@ -23,6 +23,7 @@ from torch.utils.data import Dataset
 from melba.config import Config
 
 from .splits import SplitError, read_split_csv, split_file_for_fold
+from .normalization import NormalizationSpec
 
 __all__ = [
     "CVCItem",
@@ -207,6 +208,7 @@ class CVCDataset(Dataset):
         image_size: Sequence[int] = (352, 352),
         mask_threshold: int = 127,
         spacing: Sequence[float] = (1.0, 1.0),
+        normalization: NormalizationSpec,
         augmentation: AugmentationConfig | None = None,
         seed: int = 0,
         fold: int = 0,
@@ -222,6 +224,9 @@ class CVCDataset(Dataset):
         self.spacing = tuple(float(value) for value in spacing)
         if len(self.spacing) != 2:
             raise ValueError(f"CVC-ClinicDB is 2D; spacing needs two values, got {self.spacing}")
+        if not isinstance(normalization, NormalizationSpec):
+            raise TypeError("normalization must be a NormalizationSpec")
+        self.normalization = normalization
         self.augmentation = augmentation or AugmentationConfig()
         if self.augmentation.enabled and not train:
             # Evaluation must never be augmented; make this impossible to forget.
@@ -300,16 +305,19 @@ class CVCDataset(Dataset):
         image, mask = self._resize(image, mask)
 
         image_float = np.ascontiguousarray(image, dtype=np.float32) / 255.0
+        image_chw = np.ascontiguousarray(image_float.transpose(2, 0, 1))
+        image_array = self.normalization.apply(image_chw)
         mask_float = (mask > self.mask_threshold).astype(np.float32)
 
         sample = {
-            "image": torch.from_numpy(image_float.transpose(2, 0, 1)),
+            "image": torch.from_numpy(image_array),
             "mask": torch.from_numpy(mask_float).unsqueeze(0),
             "case_id": item.case_id,
             "group_id": item.group_id,
             "split": item.split,
             "fold": int(item.fold if item.fold else self.fold),
             "spacing": self.spacing,
+            "normalization": self.normalization.kind,
             "original_size": original_size,
         }
         if not self.train:

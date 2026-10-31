@@ -42,6 +42,7 @@ def _row(**overrides):
             "case_id": "case_1",
             "group_id": "video_1",
             "empty_flag": "both_nonempty",
+            "missed_detection": 0,
             "metric": "dice",
             "value": 0.9,
         }
