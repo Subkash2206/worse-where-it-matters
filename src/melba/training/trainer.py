@@ -6,6 +6,9 @@ scheduler, AMP scaler, epoch counter, best validation value, early-stopping coun
 and all RNG states (python, numpy, torch, cuda), so resuming continues the exact
 same trajectory (including the augmentation stream, which is derived from
 ``(seed, epoch, index)``).
+
+The cosine schedule is built with ``T_max`` = the number of epochs of *this* call, so
+resume with the same ``epochs`` value to keep the learning-rate trajectory identical.
 """
 
 from __future__ import annotations
@@ -26,7 +29,7 @@ import torch.nn as nn
 
 from melba.config import Config, ConfigError
 from melba.data import build_dataloader, build_dataset
-from melba.models import build_model, count_parameters
+from melba.models import build_model
 from melba.utils import amp_is_enabled, describe_device, get_device, seed_everything
 
 __all__ = [

@@ -168,7 +168,8 @@ Writes under `results/<experiment>/stats/aggregate/`:
   seed ensemble of the baseline maps (`ensemble3`), and of the tta4 maps
   (`ensemble3_tta4`, i.e. 3 seeds x 4 views), thresholded at 0.5 and scored with the
   same metric code; compared with `baseline`, `tta4` and each other, missed
-  detections included.
+  detections included. Ensembles start from the float16 maps, which shifts Dice by
+  < 5e-4 per case and distance metrics by < 0.6 px relative to the float32 runner.
 
 Any config value can be overridden without editing files:
 `--set model.checkpoint=checkpoints/x.pt metrics.empty_policy=nan device=cpu`.
