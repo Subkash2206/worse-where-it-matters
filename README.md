@@ -19,6 +19,7 @@ number, and its modules have been removed from this repository.
 | Silent/penalised empty masks | default `empty_policy: nan` plus an explicit `empty_flag` column (`both_nonempty`, `both_empty`, `pred_empty`, `gt_empty`); `penalize` remains available for a sensitivity table only |
 | No uncertainty or cost analysis | per-view probability maps give entropy/variance (global and foreground+3-px band), view disagreement and per-view Dice vs consensus; per-case latency (3 warm-ups, CUDA synchronised) and peak GPU memory |
 | Pretrained encoders fed raw `[0, 1]` images (no ImageNet normalization — the old repo did this too) | `dataset.normalization.kind: imagenet` resolves the encoder's own mean/std from `smp.encoders.get_preprocessing_params`; applied in the dataset, tested against a hand-computed normalization |
+| CVC-ClinicDB TIFFs read with OpenCV → the malformed photometric/ExtraSamples pair makes libtiff report one channel, so every frame reached the network as **grey** (three identical channels) | frames are read with **tifffile** (true `(H, W, 3)` RGB, no BGR→RGB swap); masks are read the same way, asserted single-channel and binarised at `mask_threshold`; a regression test loads real frames and asserts 3 distinct channels, native `288x384`, and that a BGR swap would be detected |
 | Distance metrics silently ignored missed lesions | paired distance metrics use only cases non-empty **under both methods** (`n_cases_used` reported); a missed-detection table (rate + cluster-bootstrap CI + exact McNemar transitions) and an all-cases penalised sensitivity table are written by `run_stats.py` |
 | Hardcoded paths, seeds, device, hyper-parameters | everything is in `configs/*.yaml`; `device: auto`; only YAML is authoritative |
 
@@ -264,6 +265,27 @@ python scripts/compute_normalization.py --config configs/cvc_clinicdb/swinunetr_
 Every fold uses the statistics of *its own* training split (never validation or test
 frames), so switching folds cannot leak test intensities into the input scaling.
 
+## Data loading (CVC-ClinicDB)
+
+The distributed TIFFs are read with **tifffile**, not OpenCV. Their
+photometric/ExtraSamples header is malformed; libtiff warns about it and OpenCV then
+collapses the frame to a single channel and replicates it, so `cv2.imread` returns
+three *identical* channels. `tifffile.imread` returns the real RGB planes (frame 1:
+channel means 110.6 / 68.7 / 39.9), and the channel order is already RGB, so **no
+BGR→RGB swap is applied** (`melba/data/cvc.py`, guarded by
+`tests/test_cvc_color_loading.py`).
+
+* frames: `(H, W, 3)` `uint8`, native `288x384`, resized to `dataset.image_size`;
+* masks: single-channel `uint8`. They are **not** strictly 0/255 — the lesion border
+  carries anti-aliasing values (e.g. 3…112) — so they are binarised at
+  `dataset.mask_threshold` (default 127) after nearest-neighbour resizing;
+* `dataset.normalization.kind: dataset` statistics are therefore computed from the
+  three real colour planes (`data/splits/cvc_clinicdb_norm_stats.json`: fold0 mean
+  `[0.4107, 0.2795, 0.1876]`, std `[0.3052, 0.2117, 0.1405]`).
+
+Runs produced before this fix used grey input and are **not results**: they were moved
+to `archive_grayscale/` (gitignored) and are kept only to quantify the change.
+
 ## Missed detection and empty-mask handling
 
 An empty prediction on a frame that contains a lesion is recorded explicitly:
@@ -346,12 +368,16 @@ with `monai.metrics.compute_hausdorff_distance`, exact resume (atomic `last.pt`,
 RNG round-trip, epoch continuation, per-run directories), grid state classification
 (skip / evaluate-only / resume / fresh), timing gating (warm-ups only for fold 0 /
 seed 0), probability-map selection, per-fold dataset statistics, pooled seed tables,
-seed-averaged paired tests, the seed ensemble and 2D SwinUNETR forward passes.
+seed-averaged paired tests, the seed ensemble and 2D SwinUNETR forward passes, and
+colour loading of the real TIFFs (3 distinct channels, native `288x384`, mask
+binarisation at 127).
 
 ## Status / next steps
 
 * CVC-ClinicDB (2D) pipeline is complete and tested end-to-end (5 folds x 3 seeds,
   resumable grid, pooled statistics, seed ensembles, uncertainty/cost analysis).
+  Colour input (tifffile) is required for a reported number: the earlier grey runs
+  were archived to `archive_grayscale/` and are invalid.
 * `configs/cvc_clinicdb/swinunetr_2d.yaml` (MONAI SwinUNETR, `spatial_dims=2`, from
   scratch, per-fold training statistics) and its factory branch are implemented and
   unit-tested, but no SwinUNETR results have been produced yet.

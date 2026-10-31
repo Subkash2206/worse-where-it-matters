@@ -28,6 +28,9 @@ results/**/maps/
 results/**/*.npy
 results/**/*.npz
 
+# Invalid grayscale runs (archived for comparison only, never part of a result)
+archive_grayscale/
+
 # Run logs (progress, PIDs, per-run stdout)
 logs/
 

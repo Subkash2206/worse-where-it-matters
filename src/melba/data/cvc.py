@@ -1,9 +1,17 @@
 """CVC-ClinicDB (2D polyp segmentation) dataset.
 
-Images are read with OpenCV because the distributed TIFFs are not readable by
-Pillow (extra samples per pixel).  Ground-truth masks are binarised after resizing
-with nearest-neighbour interpolation, so no interpolation artefacts can create
-label values that were never annotated.
+Frames are read with ``tifffile``, not OpenCV.  The distributed TIFFs carry a
+malformed photometric/ExtraSamples pair: libtiff warns about it and OpenCV then
+collapses the frame to a single channel and replicates it, so ``cv2.imread`` returns
+three *identical* channels (a grey image) and every bit of colour is lost.  tifffile
+returns the true ``(H, W, 3)`` RGB planes, and its channel order is already RGB, so no
+BGR -> RGB swap may be applied.
+
+Ground-truth masks are single-channel ``uint8`` but not strictly 0/255: the borders
+carry anti-aliasing values (e.g. 3..112) and the interior is 255. They are binarised
+after resizing with nearest-neighbour interpolation (``dataset.mask_threshold``,
+default 127), so no interpolation artefact can create a label value that was never
+annotated.
 
 Splits are always read from the split CSV produced by
 ``scripts/make_splits.py`` (video level); this module never splits frames itself.
@@ -17,6 +25,7 @@ from typing import Any, Mapping, Sequence
 
 import cv2
 import numpy as np
+import tifffile
 import torch
 from torch.utils.data import Dataset
 
@@ -25,13 +34,8 @@ from melba.config import Config
 from .splits import SplitError, read_split_csv, split_file_for_fold
 from .normalization import NormalizationSpec
 
-# The distributed CVC-ClinicDB TIFFs trigger one benign libtiff message per frame
-# ("Sum of Photometric type-related color channels and ExtraSamples doesn't match").
-# Silencing the OpenCV log keeps run logs readable; unreadable frames still raise.
-try:  # pragma: no cover - depends on the OpenCV build
-    cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_SILENT)
-except Exception:  # pragma: no cover - older/newer OpenCV layouts
-    pass
+# cv2 is only used to resize (interpolation control for image and mask); reading is
+# done by tifffile, which avoids the malformed-header pitfalls described above.
 
 __all__ = [
     "CVCItem",
@@ -115,6 +119,46 @@ class AugmentationConfig:
         for name in ("brightness", "contrast"):
             if float(getattr(self, name)) < 0:
                 raise ValueError(f"{name} must be non-negative")
+
+
+def _as_rgb_uint8(array: np.ndarray, path: str | Path) -> np.ndarray:
+    """Validate a loaded frame and return a contiguous ``(H, W, 3)`` uint8 RGB array."""
+    data = np.asarray(array)
+    if data.ndim == 2 or (data.ndim == 3 and data.shape[2] == 1):
+        raise RuntimeError(
+            f"{path} was read as a single-channel image with shape {data.shape}; "
+            "CVC-ClinicDB frames are RGB, so a grey frame means the colour planes were "
+            "lost (read TIFFs with tifffile, not cv2.imread)"
+        )
+    if data.ndim != 3:
+        raise RuntimeError(f"{path} is not an (H, W, C) image: shape {data.shape}")
+    if data.shape[2] < 3:
+        raise RuntimeError(f"{path} has {data.shape[2]} channel(s); expected 3 (RGB)")
+    data = data[..., :3]  # drop an alpha channel if one is present
+    if data.dtype != np.uint8:
+        if np.issubdtype(data.dtype, np.integer):
+            scale = float(np.iinfo(data.dtype).max)
+        elif np.issubdtype(data.dtype, np.floating) and float(np.nanmax(data)) <= 1.0:
+            scale = 1.0
+        else:
+            scale = float(np.nanmax(data)) or 1.0
+        data = np.clip(np.asarray(data, dtype=np.float64) / scale * 255.0, 0.0, 255.0)
+        data = data.round().astype(np.uint8)
+    return np.ascontiguousarray(data)
+
+
+def _as_mask(array: np.ndarray, path: str | Path) -> np.ndarray:
+    """Validate a loaded mask: single-channel 2-D with integer values."""
+    data = np.asarray(array)
+    if data.ndim == 3 and data.shape[2] == 1:
+        data = data[..., 0]
+    if data.ndim != 2:
+        raise RuntimeError(
+            f"{path} must be a single-channel mask (H, W); got shape {data.shape}"
+        )
+    if not np.issubdtype(data.dtype, np.integer):
+        raise RuntimeError(f"{path} has non-integer dtype {data.dtype}")
+    return np.ascontiguousarray(data)
 
 
 def discover_cvc_items(config: Config) -> list[CVCItem]:
@@ -256,13 +300,15 @@ class CVCDataset(Dataset):
 
     @staticmethod
     def _read(item: CVCItem) -> tuple[np.ndarray, np.ndarray]:
-        image_bgr = cv2.imread(str(item.image_path), cv2.IMREAD_COLOR)
-        if image_bgr is None:
-            raise RuntimeError(f"Could not read image {item.image_path}")
-        mask = cv2.imread(str(item.mask_path), cv2.IMREAD_GRAYSCALE)
-        if mask is None:
-            raise RuntimeError(f"Could not read mask {item.mask_path}")
-        image = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        """Read one frame as RGB ``(H, W, 3)`` uint8 and its mask as ``(H, W)`` uint8.
+
+        ``tifffile`` keeps the colour planes that OpenCV collapses into a replicated
+        grey channel, and it returns them in RGB order, so no BGR -> RGB swap is
+        applied.  The mask is a single-channel integer image whose anti-aliased border
+        values are binarised later with ``mask_threshold``.
+        """
+        image = _as_rgb_uint8(tifffile.imread(item.image_path), item.image_path)
+        mask = _as_mask(tifffile.imread(item.mask_path), item.mask_path)
         if mask.shape != image.shape[:2]:
             raise RuntimeError(
                 f"Mask {item.mask_path} has shape {mask.shape}, image has {image.shape[:2]}"

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import cv2
 import numpy as np
 import pytest
+import tifffile
 
 from melba.config import ConfigError
 from melba.data import (
@@ -93,8 +93,7 @@ def test_dataset_applies_imagenet_normalization(toy_dataset_config) -> None:
     sample = dataset[0]
     assert sample["normalization"] == "imagenet"
 
-    raw_bgr = cv2.imread(str(dataset.items[0].image_path), cv2.IMREAD_COLOR)
-    raw_rgb = cv2.cvtColor(raw_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    raw_rgb = tifffile.imread(dataset.items[0].image_path).astype(np.float32) / 255.0
     expected = (
         raw_rgb.transpose(2, 0, 1) - np.asarray(IMAGENET_MEAN, dtype=np.float32).reshape(-1, 1, 1)
     ) / np.asarray(IMAGENET_STD, dtype=np.float32).reshape(-1, 1, 1)
@@ -112,7 +111,6 @@ def test_dataset_can_disable_normalization(toy_dataset_config) -> None:
     dataset = build_dataset(config, "test")
     sample = dataset[0]
     assert sample["normalization"] == "none"
-    raw_bgr = cv2.imread(str(dataset.items[0].image_path), cv2.IMREAD_COLOR)
-    raw_rgb = cv2.cvtColor(raw_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    raw_rgb = tifffile.imread(dataset.items[0].image_path).astype(np.float32) / 255.0
     np.testing.assert_allclose(sample["image"].numpy(), raw_rgb.transpose(2, 0, 1), rtol=1e-6)
     assert 0.0 <= float(sample["image"].min()) and float(sample["image"].max()) <= 1.0
