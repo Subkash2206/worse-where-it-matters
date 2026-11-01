@@ -32,8 +32,23 @@ if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
 from melba.config import ConfigError, load_config, parse_set_args  # noqa: E402
-from melba.eval import aggregate_all, discover_runs  # noqa: E402
+from melba.eval import (  # noqa: E402
+    TailThresholds,
+    aggregate_all,
+    discover_runs,
+    frames_by_seed,
+    per_fold_table,
+    pooled_method_table,
+    seed_averaged_frame,
+    sensitivity_table,
+    string_ids,
+    tail_table,
+    uncertainty_table,
+)
+from melba.stats import pool_folds  # noqa: E402
 from melba.utils import git_revision  # noqa: E402
+
+import pandas as pd  # noqa: E402
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -45,7 +60,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
     parser.add_argument("--per-case-dir", default=None, help="directory with the per-case CSVs")
     parser.add_argument("--maps-dir", default=None, help="root of the probability maps")
-    parser.add_argument("--output-dir", default=None, help="default: stats.output_dir/aggregate")
+    parser.add_argument("--output-dir", default=None, help="default: results/aggregate")
     parser.add_argument("--unit", default=None, choices=["group", "case"], help="pairing unit")
     parser.add_argument("--treatments", nargs="+", default=["tta2", "tta4", "tta8"])
     parser.add_argument("--control", default="baseline")
@@ -68,6 +83,158 @@ def _print_table(title: str, table, columns=None, max_rows: int = 40) -> None:
     print(
         printable.head(max_rows).to_string(index=False, float_format=lambda value: f"{value:.4f}")
     )
+
+
+def _uncertainty_tables(by_seed: dict, averaged) -> pd.DataFrame:
+    """Spearman/AUROC of the tta4 uncertainty descriptors, per seed and seed-averaged."""
+    parts: list[pd.DataFrame] = []
+    for seed, frames in sorted(by_seed.items()):
+        table = uncertainty_table(pool_folds(frames), method="tta4")
+        if not table.empty:
+            table.insert(0, "seed", int(seed))
+            parts.append(table)
+    averaged_table = uncertainty_table(averaged, method="tta4")
+    if not averaged_table.empty:
+        averaged_table.insert(0, "seed", -1)
+        parts.append(averaged_table)
+    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+
+
+def _subset(frame: pd.DataFrame | None, columns: list[str]) -> pd.DataFrame:
+    if frame is None or frame.empty:
+        return pd.DataFrame()
+    return frame[[column for column in columns if column in frame.columns]]
+
+
+def _write_summary_markdown(
+    output_dir: Path,
+    tables: dict,
+    extra_tables: dict,
+    *,
+    args: argparse.Namespace,
+    runs,
+    folds_found,
+    seeds_found,
+) -> Path:
+    """Write ``summary.md`` with the protocol sections (a)-(g)."""
+    from melba.eval import write_markdown
+
+    def pick(frame, *columns):
+        return _subset(frame, list(columns))
+
+    method_summary = extra_tables["method_summary"]
+    frame_level = method_summary.loc[method_summary["level"] == "frame"]
+    video_level = method_summary.loc[method_summary["level"] == "video"]
+    uncertainty = extra_tables["uncertainty"]
+    if not uncertainty.empty:
+        uncertainty = uncertainty.loc[uncertainty["seed"] == -1]
+
+    summary_columns = ("method", "metric", "n_cases", "n_videos", "n_seeds", "mean", "std")
+    paired_columns = (
+        "treatment", "metric", "n_units", "n_cases_used", "restriction", "delta_mean",
+        "ci_low", "ci_high", "p_value", "p_value_adjusted", "effect_size", "preferred",
+    )
+    detection_columns = (
+        "method", "n_cases", "n_missed", "missed_rate", "ci_low", "ci_high",
+        "nonempty_to_empty", "empty_to_nonempty", "mcnemar_p", "mcnemar_p_adjusted",
+    )
+    tail_columns = (
+        "method", "n_cases", "hd95_p90", "hd95_p95", "hd95_failure_rate",
+        "dice_failure_rate", "delta_hd95_p95_estimate", "delta_hd95_p95_ci_low",
+        "delta_hd95_p95_ci_high", "delta_hd95_failure_rate_estimate",
+        "delta_hd95_failure_rate_ci_low", "delta_hd95_failure_rate_ci_high",
+        "delta_dice_failure_rate_estimate", "delta_dice_failure_rate_ci_low",
+        "delta_dice_failure_rate_ci_high",
+    )
+    sensitivity_columns = (
+        "treatment", "metric", "n_units", "n_cases_used", "delta_mean", "ci_low", "ci_high",
+        "p_value", "p_value_adjusted", "preferred",
+    )
+    uncertainty_columns = (
+        "seed", "predictor", "n_cases", "n_failures", "spearman_vs_hd95",
+        "spearman_vs_hd95_p", "spearman_vs_one_minus_dice",
+        "spearman_vs_one_minus_dice_p", "auroc_failure",
+    )
+
+    preamble = (
+        f"{len(runs)} runs: folds {folds_found} x seeds {seeds_found}; config "
+        f"`{args.config}`; pairing unit `{args.unit or 'group'}`; bootstrap draws "
+        f"`{args.n_bootstrap or 'config'}`; Holm correction; failure thresholds "
+        "HD95 > 50 px and Dice < 0.5.\n\n"
+        "Frames of one video are not independent, so every CI and test resamples or "
+        "pairs at the video level (29 units). Distance metrics are restricted to cases "
+        "non-empty under both methods (`n_cases_used`); section (e) repeats the "
+        "comparison on all cases with empty predictions penalised by the image "
+        "diagonal. `ensemble3` averages the three seeds' baseline maps and "
+        "`ensemble3_tta4` their tta4 maps (3 x 4 views); both are a single realisation, "
+        "so their across-seed std is undefined (blank)."
+    )
+    sections = [
+        (
+            "(a) Per-method summary - frame level",
+            pick(frame_level, *summary_columns),
+            "Mean over all frames of the fold, pooled over the 5 folds (612 cases), "
+            "then mean ± std across the three seeds.",
+        ),
+        (
+            "(a) Per-method summary - video level",
+            pick(video_level, *summary_columns),
+            "Each video contributes one value (mean over its frames), 29 videos in "
+            "total; mean ± std across the three seeds.",
+        ),
+        (
+            "(b) Paired comparisons vs baseline - video level, seeds averaged per case",
+            pick(tables.get("paired_seed_averaged"), *paired_columns),
+            "Wilcoxon signed-rank (primary), seeded percentile bootstrap CI of the mean "
+            "delta, matched-pairs rank-biserial effect size, Holm across metrics. "
+            "`restriction=both_nonempty` marks distance metrics and `n_cases_used` is "
+            "the number of cases they were computed on.",
+        ),
+        (
+            "(c) Missed detections pooled over folds",
+            pick(tables.get("detection_seed_averaged"), *detection_columns),
+            "Cluster (video) bootstrap CI of the missed rate; `nonempty_to_empty` counts "
+            "new misses and `empty_to_nonempty` recovered cases relative to the "
+            "baseline; exact McNemar p on the discordant pairs, Holm-corrected.",
+        ),
+        (
+            "(d) Tail metrics (HD95 percentiles, failure rates) and change vs baseline",
+            pick(extra_tables["tail_metrics"], *tail_columns),
+            "Percentiles over all cases (an undefined distance counts as a failure); the "
+            "change is a video-cluster paired bootstrap CI of the difference.",
+        ),
+        (
+            "(e) Sensitivity: all cases, empty predictions penalised",
+            pick(extra_tables["sensitivity_penalized"], *sensitivity_columns),
+            "Uses the `*_penalized` columns (empty prediction -> image diagonal), so a "
+            "method that misses lesions cannot look good by dropping them.",
+        ),
+        (
+            "(f) Do the TTA uncertainty descriptors rank errors?",
+            pick(uncertainty, *uncertainty_columns),
+            "Spearman rho against HD95 and 1-Dice, and AUROC for detecting a failure "
+            "(Dice < 0.5 or missed detection); row `seed=-1` is the seed-averaged set.",
+        ),
+        (
+            "(g) Baseline Dice per fold",
+            extra_tables["per_fold_baseline"],
+            "Fold-to-fold spread of the control method (seeds averaged).",
+        ),
+        (
+            "Ensemble comparisons - video level, seeds averaged per case",
+            pick(tables.get("ensemble_comparison"), *paired_columns),
+            "`ensemble3` and `ensemble3_tta4` against `baseline` and `tta4`.",
+        ),
+    ]
+    return Path(
+        write_markdown(
+            str(Path(output_dir) / "summary.md"),
+            title="MELBA CVC-ClinicDB - 5-fold x 3-seed TTA results",
+            preamble=preamble,
+            sections=sections,
+        )
+    )
+
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -107,8 +274,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.output_dir:
         output_dir: Path | None = Path(args.output_dir)
     else:
-        base = config.resolve(str(stats.get("output_dir", "results/stats")))
-        output_dir = base / "aggregate"
+        output_dir = _REPO_ROOT / "results" / "aggregate"
 
     try:
         result = aggregate_all(
@@ -206,11 +372,93 @@ def main(argv: list[str] | None = None) -> int:
     for note in result.notes:
         print(f"note: {note}")
 
+    # ---- extra report tables: levels, tails, sensitivity, uncertainty ----------
+    from melba.eval.aggregate import write_tables
+
+    by_seed = frames_by_seed(runs)
+    averaged = seed_averaged_frame(by_seed)
+    ensembles = tables.get("ensemble_per_case")
+    pieces = [string_ids(averaged.drop(columns=["n_seeds"], errors="ignore"))]
+    if ensembles is not None and not ensembles.empty:
+        pieces.append(string_ids(ensembles))
+    combined = pd.concat(pieces, ignore_index=True)
+
+    extra_tables = {
+        "method_summary": pooled_method_table(by_seed, ensemble_frame=ensembles),
+        "per_fold_baseline": per_fold_table(by_seed, method=args.control, metrics=("dice",)),
+        "tail_metrics": tail_table(
+            combined,
+            control=args.control,
+            thresholds=TailThresholds(),
+            n_bootstrap=n_bootstrap,
+            ci=ci,
+            seed=bootstrap_seed,
+        ),
+        "sensitivity_penalized": sensitivity_table(
+            averaged,
+            control=args.control,
+            treatments=args.treatments,
+            unit=unit,
+            n_bootstrap=n_bootstrap,
+            ci=ci,
+            seed=bootstrap_seed,
+            correction=correction,
+        ),
+        "uncertainty": _uncertainty_tables(by_seed, averaged),
+    }
+    tables.update(extra_tables)
+    extra_paths = write_tables(extra_tables, output_dir)
+
+    _print_table(
+        "per-method summary, frame level (mean +/- std across seeds)",
+        extra_tables["method_summary"].loc[lambda frame: frame["level"] == "frame"],
+        columns=["method", "metric", "n_cases", "n_videos", "n_seeds", "mean", "std"],
+    )
+    _print_table(
+        "tail metrics (HD95 percentiles and failure rates)",
+        extra_tables["tail_metrics"],
+        columns=[
+            "method",
+            "n_cases",
+            "hd95_p90",
+            "hd95_p95",
+            "hd95_failure_rate",
+            "dice_failure_rate",
+            "delta_hd95_p95_estimate",
+            "delta_hd95_p95_ci_low",
+            "delta_hd95_p95_ci_high",
+            "delta_dice_failure_rate_estimate",
+        ],
+    )
+    _print_table(
+        "uncertainty vs error (seed-averaged)",
+        extra_tables["uncertainty"].loc[lambda frame: frame["seed"] == -1],
+        columns=[
+            "predictor",
+            "n_cases",
+            "n_failures",
+            "spearman_vs_hd95",
+            "spearman_vs_one_minus_dice",
+            "auroc_failure",
+        ],
+    )
+    _print_table("baseline Dice per fold (seeds averaged)", extra_tables["per_fold_baseline"])
+
+    summary_path = _write_summary_markdown(
+        output_dir,
+        tables,
+        extra_tables,
+        args=args,
+        runs=runs,
+        folds_found=folds_found,
+        seeds_found=seeds_found,
+    )
+
     print(f"\ngit revision: {git_revision()}")
-    if result.paths:
-        print("written:")
-        for name, path in sorted(result.paths.items()):
-            print(f"  {name:<28} {path}")
+    print("written:")
+    for name, path in sorted({**(result.paths or {}), **extra_paths}.items()):
+        print(f"  {name:<28} {path}")
+    print(f"  {'summary.md':<28} {summary_path}")
     return 0
 
 

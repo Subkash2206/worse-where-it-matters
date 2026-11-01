@@ -165,10 +165,12 @@ warm-ups + one timed pass); every other run does exactly one forward pass per vi
 python scripts/aggregate.py --config configs/cvc_clinicdb/unet_resnet50.yaml
 ```
 
-Writes under `results/<experiment>/stats/aggregate/`:
+Writes under `results/aggregate/` (CSV per table plus a `summary.md` report):
 
 * `pooled_by_seed.csv` — per method and metric, the pooled 29-video result of each
   seed, the mean and the standard deviation across seeds;
+* `method_summary.csv` — per method/metric at **frame level and video level** (mean ±
+  std across seeds), including the two seed ensembles;
 * `paired_by_seed.csv` / `paired_seed_averaged.csv` — video-level Wilcoxon tests
   pooled over the 5 folds, once per seed and once with metric values averaged per
   case over seeds (so a video is still one test unit);
@@ -179,7 +181,15 @@ Writes under `results/<experiment>/stats/aggregate/`:
   (`ensemble3_tta4`, i.e. 3 seeds x 4 views), thresholded at 0.5 and scored with the
   same metric code; compared with `baseline`, `tta4` and each other, missed
   detections included. Ensembles start from the float16 maps, which shifts Dice by
-  < 5e-4 per case and distance metrics by < 0.6 px relative to the float32 runner.
+  < 5e-4 per case and distance metrics by < 0.6 px relative to the float32 runner;
+* `tail_metrics.csv` — 90th/95th percentile HD95 and failure rates (HD95 > 50 px,
+  Dice < 0.5) with a video-cluster bootstrap CI of the change vs the control;
+* `sensitivity_penalized.csv` — all-cases comparison with empty predictions penalised
+  by the image diagonal (survivorship-bias check);
+* `uncertainty.csv` — Spearman rho of `view_disagreement` / `entropy_mean_roi`
+  against HD95 and 1-Dice, plus AUROC for detecting failures;
+* `per_fold_baseline.csv` — fold-to-fold spread of the control method;
+* `summary.md` — all of the above rendered as markdown with the protocol notes.
 
 Any config value can be overridden without editing files:
 `--set model.checkpoint=checkpoints/x.pt metrics.empty_policy=nan device=cpu`.
