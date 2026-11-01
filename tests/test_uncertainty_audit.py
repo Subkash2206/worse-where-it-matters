@@ -113,14 +113,17 @@ def _audit_fixture(tmp_path):
             np.save(map_dir / f"{case_id}__baseline__mean.npy", baseline_map.astype(np.float16))
         runs.append(SimpleNamespace(fold=0, seed=seed, map_dir=map_dir))
 
-    dice = {"c_missed": 0.0, "c_tiny": 0.3, "c_clean1": 0.9, "c_clean2": 0.8}
+    dice_by_method = {
+        "tta4": {"c_missed": 0.0, "c_tiny": 0.3, "c_clean1": 0.9, "c_clean2": 0.8},
+        "baseline": {"c_missed": 0.0, "c_tiny": 0.55, "c_clean1": 0.9, "c_clean2": 0.8},
+    }
     missed = {"c_missed": 1, "c_tiny": 0, "c_clean1": 0, "c_clean2": 0}
     rows = []
-    for index, case_id in enumerate(dice):
+    for index, case_id in enumerate(missed):
         for method in ("tta4", "baseline"):
             empty = case_id == "c_missed"
             values = {
-                "dice": dice[case_id],
+                "dice": dice_by_method[method][case_id],
                 "hd95": 200.0 if empty else (60.0 if case_id == "c_tiny" else 5.0),
                 "entropy_mean": 0.2,
                 "entropy_mean_roi": float("nan") if empty else 0.1,
@@ -137,7 +140,7 @@ def _audit_fixture(tmp_path):
                         "method": method,
                         "metric": metric,
                         "value": value,
-                        "missed_detection": missed[case_id] if method == "tta4" else 0,
+                        "missed_detection": missed[case_id],
                     }
                 )
     return runs, pd.DataFrame(rows)
@@ -156,6 +159,8 @@ def test_run_uncertainty_audit_reports_the_nan_gap_explicitly(tmp_path) -> None:
     assert all_failures["n_used"] == 3
     assert all_failures["n_undefined"] == 1
     assert all_failures["n_failures"] == 1
+    assert all_failures["label_source"] == "own"
+    assert all_failures["label_prediction"] == "tta4"
     assert np.isfinite(all_failures["auroc_if_undefined_certain"])
     assert np.isfinite(all_failures["auroc_if_undefined_uncertain"])
 
@@ -168,21 +173,33 @@ def test_run_uncertainty_audit_reports_the_nan_gap_explicitly(tmp_path) -> None:
     image_entropy = auroc.loc[
         (auroc["predictor"] == "tta4_entropy_image")
         & (auroc["failure_definition"] == "missed_vs_clean")
+        & (auroc["label_source"] == "own")
     ].iloc[0]
     assert image_entropy["n_used"] == 3  # missed vs the two clean cases
+
+    # a baseline predictor is scored against the baseline prediction ...
+    baseline_rows = auroc.loc[auroc["predictor"] == "baseline_entropy_roi"]
+    assert {"own", "tta4"} <= set(baseline_rows["label_source"])
+    baseline_own = baseline_rows.loc[baseline_rows["label_source"] == "own"].iloc[0]
+    assert baseline_own["label_prediction"] == "baseline"
+    # ... whose labels are not the tta4 ones (c_tiny is a tta4 failure only)
+    per_case = audit["per_case"].set_index("case_id")
+    assert per_case.loc["c_tiny", "dice_tta4"] < 0.5 < per_case.loc["c_tiny", "dice_baseline"]
+    assert bool(per_case.loc["c_tiny", "missed_baseline"]) is False
+    assert per_case["dice_ensemble3"].isna().all()  # no ensemble frame passed
 
     diagnostics = audit["roi_diagnostics"].set_index("cohort")
     assert diagnostics.loc["failures_all", "n"] == 2
     assert diagnostics.loc["failures_all", "n_empty_prediction"] == 1
     assert diagnostics.loc["failures_tiny_1_10px", "n"] == 1
 
-    per_case = audit["per_case"].set_index("case_id")
     assert per_case.loc["c_missed", "pred_area_px"] == 0
     assert np.isnan(per_case.loc["c_missed", "one_minus_confidence"])
     assert per_case.loc["c_clean1", "pred_area_px"] > 1
 
-    assert {"predictor", "compared_with", "delta_auroc", "p_value"} <= set(
+    assert {"predictor", "compared_with", "label_prediction", "delta_auroc", "p_value"} <= set(
         audit["tests"].columns
     )
+    assert any("failures per prediction" in note for note in audit["notes"])
     assert any("no ROI value" in note for note in audit["notes"])
 

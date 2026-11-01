@@ -193,9 +193,13 @@ Writes under `results/aggregate/` (CSV per table plus a `summary.md` report):
   (all, non-missed, missed-only) with video-cluster bootstrap CIs, explicit
   `n_used`/`n_undefined` counts and NaN bounds, Spearman for every predictor, and
   paired bootstrap tests against trivial baselines (predicted area, 1 − confidence,
-  image entropy, single-view entropy) and the seed-ensemble entropy/variance. The ROI
-  descriptors are **undefined for an empty prediction**, so a plain AUROC silently
-  drops missed detections — this table makes that explicit;
+  image entropy, single-view entropy) and the seed-ensemble entropy/variance. Every
+  predictor is scored against the failures of **its own** prediction (`label_source:
+  own`: baseline vs baseline, tta4 vs tta4, ensemble3 vs ensemble3, seed-averaged tta4
+  map vs ensemble3_tta4) and the table repeats the audit against the shared tta4
+  labels (`label_source: tta4`) for comparison. The ROI descriptors are **undefined
+  for an empty prediction**, so a plain AUROC silently drops missed detections — this
+  table makes that explicit;
 * `per_fold_baseline.csv` — fold-to-fold spread of the control method;
 * `summary.md` — all of the above rendered as markdown with the protocol notes.
 

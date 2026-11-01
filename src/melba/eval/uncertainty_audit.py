@@ -234,16 +234,18 @@ def build_case_table(
     *,
     band_px: int = DEFAULT_BAND_PX,
     threshold: float = 0.5,
+    ensemble_frame: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Per-case predictors (CSV descriptors + map-derived baselines) and failure labels.
+    """Per-case predictors and per-prediction failure labels.
 
-    ``tta4``/``baseline`` descriptors come from the long-format rows (already averaged
-    over seeds by the caller); the map-derived predictors are recomputed from the saved
-    probability maps with the runner's own ROI definition.
+    Every predictor is paired with the labels of **its own** prediction: ``baseline_*``
+    with the single-view prediction, ``tta4_*`` with the tta4 prediction,
+    ``ensemble3_*`` with the seed ensemble of the baseline maps and
+    ``ensemble3_tta4``/``map_*_tta4``/``pred_area_px``/``one_minus_confidence`` with the
+    seed-averaged tta4 map.  All label sets are kept as columns so any analysis can also
+    be repeated against one shared set.
     """
     case_metrics = (
-        "dice",
-        "hd95",
         "entropy_mean",
         "entropy_mean_roi",
         "variance_mean",
@@ -266,16 +268,43 @@ def build_case_table(
         }
     )
     meta = (
-        averaged.loc[
-            averaged["method"] == "tta4", ["case_id", "group_id", "fold", "missed_detection"]
-        ]
+        averaged.loc[averaged["method"] == "tta4", ["case_id", "group_id", "fold"]]
         .drop_duplicates("case_id")
-        .rename(columns={"missed_detection": "missed"})
+        .assign(case_id=lambda frame: frame["case_id"].astype(str))
     )
-    table = meta.merge(tta4, on="case_id", how="left").merge(baseline, on="case_id", how="left")
-    table["case_id"] = table["case_id"].astype(str)
+
+    def labels_for(prefix: str, frame: pd.DataFrame, method: str) -> pd.DataFrame:
+        """``dice``/``hd95``/``missed`` columns for one prediction, keyed by case id."""
+        wide = _wide(frame, method, ("dice", "hd95"))
+        missed = (
+            frame.loc[frame["method"] == method, ["case_id", "missed_detection"]]
+            .drop_duplicates("case_id")
+            .rename(columns={"missed_detection": f"missed_{prefix}"})
+        )
+        wide = wide.merge(missed, on="case_id", how="outer")
+        wide["case_id"] = wide["case_id"].astype(str)
+        return wide.rename(columns={"dice": f"dice_{prefix}", "hd95": f"hd95_{prefix}"})
+
+    table = labels_for("tta4", averaged, "tta4")
+    table = table.merge(labels_for("baseline", averaged, "baseline"), on="case_id", how="outer")
+    if ensemble_frame is not None and not ensemble_frame.empty:
+        for prefix, method in (("ensemble3", "ensemble3"), ("ensemble3_tta4", "ensemble3_tta4")):
+            if method in set(ensemble_frame["method"].unique()):
+                table = table.merge(labels_for(prefix, ensemble_frame, method), on="case_id", how="outer")
+            else:
+                for column in (f"dice_{prefix}", f"hd95_{prefix}", f"missed_{prefix}"):
+                    table[column] = np.nan
+    else:
+        for prefix in ("ensemble3", "ensemble3_tta4"):
+            for column in (f"dice_{prefix}", f"hd95_{prefix}", f"missed_{prefix}"):
+                table[column] = np.nan
+
+    table = table.merge(meta, on="case_id", how="left")
+    table = table.merge(tta4, on="case_id", how="left").merge(baseline, on="case_id", how="left")
     table["fold"] = table["fold"].astype(int)
-    table["missed"] = table["missed"].astype(bool)
+    for prefix in ("tta4", "baseline", "ensemble3", "ensemble3_tta4"):
+        column = f"missed_{prefix}"
+        table[column] = table[column].fillna(0).astype(bool)
 
     runs_by_fold: dict[int, list[Any]] = {}
     for run in runs:
@@ -320,14 +349,15 @@ def _nanmedian(values: np.ndarray) -> float:
 
 
 def roi_diagnostics(table: pd.DataFrame, *, near_empty_px: int = NEAR_EMPTY_PX) -> pd.DataFrame:
-    """How the ROI descriptors behave on failures: empty, near-empty and larger ROIs."""
+    """How the ROI descriptors behave on the tta4 failures (empty, near-empty, larger)."""
     rows: list[dict[str, Any]] = []
-    failures = table.loc[table["failure_all"]]
+    failure = table["missed_tta4"] | (table["dice_tta4"] < 0.5)
+    failures = table.loc[failure]
     cohorts = {
         "all_cases": table,
         "failures_all": failures,
-        "failures_non_missed": failures.loc[~failures["missed"]],
-        "failures_missed": failures.loc[failures["missed"]],
+        "failures_non_missed": failures.loc[~failures["missed_tta4"]],
+        "failures_missed": failures.loc[failures["missed_tta4"]],
     }
     for name, cohort in cohorts.items():
         if cohort.empty:
@@ -394,6 +424,25 @@ PREDICTORS: dict[str, str] = {
     "ensemble3_variance_image": "ensemble3: across-seed variance over the whole image",
 }
 
+#: which prediction's failures each predictor is scored against (``own`` labels)
+PREDICTOR_LABELS: dict[str, str] = {
+    "tta4_entropy_roi": "tta4",
+    "tta4_variance_roi": "tta4",
+    "tta4_view_disagreement": "tta4",
+    "tta4_entropy_image": "tta4",
+    "map_entropy_roi_tta4": "ensemble3_tta4",
+    "map_variance_roi_tta4": "ensemble3_tta4",
+    "map_ambiguous_fraction_tta4": "ensemble3_tta4",
+    "pred_area_px": "ensemble3_tta4",
+    "one_minus_confidence": "ensemble3_tta4",
+    "baseline_entropy_roi": "baseline",
+    "baseline_entropy_image": "baseline",
+    "ensemble3_entropy_roi": "ensemble3",
+    "ensemble3_variance_roi": "ensemble3",
+    "ensemble3_entropy_image": "ensemble3",
+    "ensemble3_variance_image": "ensemble3",
+}
+
 
 
 def run_uncertainty_audit(
@@ -401,6 +450,7 @@ def run_uncertainty_audit(
     averaged: pd.DataFrame,
     *,
     by_seed: Mapping[int, Sequence[pd.DataFrame]] | None = None,
+    ensemble_frame: pd.DataFrame | None = None,
     n_bootstrap: int = 2000,
     ci: float = 0.95,
     seed: int = 0,
@@ -411,44 +461,57 @@ def run_uncertainty_audit(
     """Build every uncertainty-audit table (see the module docstring)."""
     from melba.eval.report import spearman
 
-    table = build_case_table(runs, averaged, band_px=band_px, threshold=threshold)
-    table["failure_all"] = table["missed"] | (table["dice"] < 0.5)
-    table["failure_non_missed"] = (~table["missed"]) & (table["dice"] < 0.5)
-    table["clean"] = (~table["missed"]) & (table["dice"] >= 0.5)
-
-    definitions = {
-        "all_failures": (table["failure_all"], None),
-        "non_missed_failures": (table["failure_non_missed"], ~table["missed"]),
-        "missed_vs_clean": (table["missed"], table["missed"] | table["clean"]),
-    }
+    table = build_case_table(
+        runs, averaged, band_px=band_px, threshold=threshold, ensemble_frame=ensemble_frame
+    )
+    definitions_by_source: dict[str, dict[str, tuple[pd.Series, pd.Series | None]]] = {}
+    for prefix in ("tta4", "baseline", "ensemble3", "ensemble3_tta4"):
+        dice = table[f"dice_{prefix}"].astype(float)
+        missed = table[f"missed_{prefix}"].astype(bool)
+        definitions_by_source[prefix] = {
+            "all_failures": (missed | (dice < 0.5), None),
+            "non_missed_failures": ((~missed) & (dice < 0.5), ~missed),
+            "missed_vs_clean": (missed, missed | ((~missed) & (dice >= 0.5))),
+        }
     auroc_rows: list[dict[str, Any]] = []
     for key, description in PREDICTORS.items():
         if key not in table.columns:
             continue
-        for definition, (labels, subset) in definitions.items():
-            frame = table if subset is None else table.loc[subset]
-            frame_labels = labels.loc[frame.index]
-            result = auroc_ci(
-                frame[key],
-                frame_labels,
-                frame["group_id"],
-                n_bootstrap=n_bootstrap,
-                ci=ci,
-                seed=seed,
-            )
-            low_bound = high_bound = float("nan")
-            if definition == "all_failures":
-                low_bound, high_bound = auroc_nan_bounds(frame[key], frame_labels)
-            auroc_rows.append(
-                {
-                    "predictor": key,
-                    "description": description,
-                    "failure_definition": definition,
-                    **result,
-                    "auroc_if_undefined_certain": low_bound,
-                    "auroc_if_undefined_uncertain": high_bound,
-                }
-            )
+        own = PREDICTOR_LABELS.get(key, "tta4")
+        if not np.isfinite(table[f"dice_{own}"].to_numpy(dtype=float)).any():
+            own = "tta4"  # no ensemble labels available (e.g. ensembles skipped)
+        for source, label_source in ((own, "own"), ("tta4", "tta4")):
+            if label_source == "tta4" and source == own and own != "tta4":
+                pass  # still report the shared-label row for transparency
+            if label_source == "tta4" and own == "tta4":
+                continue  # own == shared, do not duplicate
+            definitions = definitions_by_source[source]
+            for definition, (labels, subset) in definitions.items():
+                frame = table if subset is None else table.loc[subset]
+                frame_labels = labels.loc[frame.index]
+                result = auroc_ci(
+                    frame[key],
+                    frame_labels,
+                    frame["group_id"],
+                    n_bootstrap=n_bootstrap,
+                    ci=ci,
+                    seed=seed,
+                )
+                low_bound = high_bound = float("nan")
+                if definition == "all_failures":
+                    low_bound, high_bound = auroc_nan_bounds(frame[key], frame_labels)
+                auroc_rows.append(
+                    {
+                        "predictor": key,
+                        "description": description,
+                        "label_source": label_source,
+                        "label_prediction": source,
+                        "failure_definition": definition,
+                        **result,
+                        "auroc_if_undefined_certain": low_bound,
+                        "auroc_if_undefined_uncertain": high_bound,
+                    }
+                )
     auroc_table = pd.DataFrame(auroc_rows)
 
     spearman_rows: list[dict[str, Any]] = []
@@ -456,56 +519,79 @@ def run_uncertainty_audit(
         if key not in table.columns:
             continue
         values = table[key].to_numpy(dtype=float)
-        for target, target_values in (
-            ("hd95", table["hd95"].to_numpy(dtype=float)),
-            ("one_minus_dice", 1.0 - table["dice"].to_numpy(dtype=float)),
-        ):
-            rho, p_value = spearman(values, target_values)
-            used = int(np.sum(np.isfinite(values) & np.isfinite(target_values)))
-            spearman_rows.append(
-                {
-                    "predictor": key,
-                    "target": target,
-                    "n_used": used,
-                    "spearman_rho": rho,
-                    "p_value": p_value,
-                }
-            )
+        own = PREDICTOR_LABELS.get(key, "tta4")
+        if not np.isfinite(table[f"dice_{own}"].to_numpy(dtype=float)).any():
+            own = "tta4"
+        for source, label_source in ((own, "own"), ("tta4", "tta4")):
+            if label_source == "tta4" and own == "tta4":
+                continue
+            for target, target_values in (
+                ("hd95", table[f"hd95_{source}"].to_numpy(dtype=float)),
+                ("one_minus_dice", 1.0 - table[f"dice_{source}"].to_numpy(dtype=float)),
+            ):
+                rho, p_value = spearman(values, target_values)
+                used = int(np.sum(np.isfinite(values) & np.isfinite(target_values)))
+                spearman_rows.append(
+                    {
+                        "predictor": key,
+                        "label_source": label_source,
+                        "label_prediction": source,
+                        "target": target,
+                        "n_used": used,
+                        "spearman_rho": rho,
+                        "p_value": p_value,
+                    }
+                )
     spearman_table = pd.DataFrame(spearman_rows)
 
-    labels = table["failure_non_missed"]
-    subset = table.loc[~table["missed"]]
-    subset_labels = labels.loc[subset.index]
     test_rows: list[dict[str, Any]] = []
     for other in PREDICTORS:
         if other == "tta4_entropy_roi" or other not in table.columns:
             continue
-        result = auroc_difference(
-            subset["tta4_entropy_roi"],
-            subset[other],
-            subset_labels,
-            subset["group_id"],
-            n_bootstrap=n_bootstrap,
-            ci=ci,
-            seed=seed,
-        )
-        test_rows.append(
-            {
-                "predictor": "tta4_entropy_roi",
-                "compared_with": other,
-                "failure_definition": "non_missed_failures",
-                **result,
-            }
-        )
+        other_source = PREDICTOR_LABELS.get(other, "tta4")
+        if not np.isfinite(table[f"dice_{other_source}"].to_numpy(dtype=float)).any():
+            other_source = "tta4"
+        for source in dict.fromkeys(("tta4", other_source)):
+            labels, subset = definitions_by_source[source]["non_missed_failures"]
+            frame = table.loc[subset]
+            result = auroc_difference(
+                frame["tta4_entropy_roi"],
+                frame[other],
+                labels.loc[frame.index],
+                frame["group_id"],
+                n_bootstrap=n_bootstrap,
+                ci=ci,
+                seed=seed,
+            )
+            test_rows.append(
+                {
+                    "predictor": "tta4_entropy_roi",
+                    "compared_with": other,
+                    "label_prediction": source,
+                    "failure_definition": "non_missed_failures",
+                    **result,
+                }
+            )
     test_table = pd.DataFrame(test_rows)
 
     notes: list[str] = []
-    failures = table.loc[table["failure_all"]]
+    tta4_failure = table["missed_tta4"] | (table["dice_tta4"] < 0.5)
+    failures = table.loc[tta4_failure]
+    counts = {
+        prefix: int(
+            (table[f"missed_{prefix}"] | (table[f"dice_{prefix}"] < 0.5)).sum()
+        )
+        for prefix in ("tta4", "baseline", "ensemble3", "ensemble3_tta4")
+    }
     notes.append(
-        f"{len(failures)} failures (Dice < 0.5 or missed): "
-        f"{int(failures['tta4_entropy_roi'].isna().sum())} have no ROI value (empty "
-        f"prediction), {int((failures['pred_area_px'] <= near_empty_px).sum())} have a ROI "
-        f"of <= {near_empty_px} px."
+        "failures per prediction (Dice < 0.5 or missed): "
+        + ", ".join(f"{prefix} {count}" for prefix, count in counts.items())
+    )
+    notes.append(
+        f"tta4 shares {len(failures)} failures; "
+        f"{int(failures['tta4_entropy_roi'].isna().sum())} of them have no ROI value "
+        f"(empty prediction), {int((failures['pred_area_px'] <= near_empty_px).sum())} "
+        f"have a ROI of <= {near_empty_px} px."
     )
     if by_seed is not None:
         notes.append(_validate_against_runner(runs, by_seed))

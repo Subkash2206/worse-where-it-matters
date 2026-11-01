@@ -247,6 +247,8 @@ def _write_summary_markdown(
                         audit["auroc"],
                         [
                             "predictor",
+                            "label_source",
+                            "label_prediction",
                             "failure_definition",
                             "auroc",
                             "ci_low",
@@ -258,30 +260,54 @@ def _write_summary_markdown(
                             "auroc_if_undefined_uncertain",
                         ],
                     ),
-                    "`all_failures` = Dice < 0.5 or missed; `non_missed_failures` excludes "
-                    "missed detections (every predictor is defined there); "
-                    "`missed_vs_clean` contrasts missed detections with clean cases only. "
-                    "`n_used`/`n_undefined` make the NaN drop visible, and the two bound "
-                    "columns score the undefined cases as maximally certain/uncertain. "
-                    "CIs resample videos (29 clusters).",
+                    "`label_source=own` scores each predictor against the failures of "
+                    "**its own** prediction (baseline descriptor vs baseline failures, tta4 "
+                    "vs tta4, ensemble3 vs ensemble3, seed-averaged tta4 map vs "
+                    "ensemble3_tta4); `label_source=tta4` repeats the audit against the "
+                    "shared tta4 labels for comparison. `all_failures` = Dice < 0.5 or "
+                    "missed; `non_missed_failures` excludes missed detections (every "
+                    "predictor is defined there); `missed_vs_clean` contrasts missed "
+                    "detections with clean cases only. `n_used`/`n_undefined` make the NaN "
+                    "drop visible and the two bound columns score undefined cases as "
+                    "maximally certain/uncertain. CIs resample videos (29 clusters).",
                 ),
                 (
                     "(f-audit) Spearman against HD95 and 1 - Dice (all predictors)",
                     _subset(
                         audit["spearman"],
-                        ["predictor", "target", "n_used", "spearman_rho", "p_value"],
+                        [
+                            "predictor",
+                            "label_source",
+                            "label_prediction",
+                            "target",
+                            "n_used",
+                            "spearman_rho",
+                            "p_value",
+                        ],
                     ),
-                    "Pooled over folds and seeds (seed-averaged values); `n_used` counts the "
-                    "finite pairs, so ROI descriptors lose the missed detections here.",
+                    "Targets also come from the predictor's own prediction "
+                    "(`label_source=own`); the `tta4` rows repeat the correlation against "
+                    "the tta4 prediction for comparison. `n_used` counts the finite pairs, "
+                    "so ROI descriptors lose the missed detections here.",
                 ),
                 (
                     "(f-audit) tta4 entropy(ROI) vs each alternative (paired bootstrap)",
                     _subset(
                         audit["tests"],
-                        ["compared_with", "delta_auroc", "ci_low", "ci_high", "p_value", "n_used"],
+                        [
+                            "compared_with",
+                            "label_prediction",
+                            "delta_auroc",
+                            "ci_low",
+                            "ci_high",
+                            "p_value",
+                            "n_used",
+                        ],
                     ),
                     "Definition `non_missed_failures`, paired video-cluster bootstrap of the "
-                    "AUROC difference (positive = tta4 entropy in the ROI is better).",
+                    "AUROC difference (positive = tta4 entropy in the ROI is better), "
+                    "computed twice: under the tta4 labels and under the alternative's own "
+                    "labels (`label_prediction`).",
                 ),
             ]
         )
@@ -475,6 +501,7 @@ def main(argv: list[str] | None = None) -> int:
         runs,
         averaged,
         by_seed=by_seed,
+        ensemble_frame=tables.get("ensemble_per_case"),
         n_bootstrap=min(1000, n_bootstrap),
         ci=ci,
         seed=bootstrap_seed,
@@ -507,6 +534,8 @@ def main(argv: list[str] | None = None) -> int:
         ],
         columns=[
             "predictor",
+            "label_source",
+            "label_prediction",
             "failure_definition",
             "auroc",
             "ci_low",
@@ -520,7 +549,15 @@ def main(argv: list[str] | None = None) -> int:
     _print_table(
         "uncertainty audit: tta4 entropy(ROI) vs each alternative (paired bootstrap)",
         audit["tests"],
-        columns=["compared_with", "delta_auroc", "ci_low", "ci_high", "p_value", "n_used"],
+        columns=[
+            "compared_with",
+            "label_prediction",
+            "delta_auroc",
+            "ci_low",
+            "ci_high",
+            "p_value",
+            "n_used",
+        ],
         max_rows=30,
     )
     _print_table(
