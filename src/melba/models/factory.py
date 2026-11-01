@@ -60,10 +60,15 @@ def build_model(config: Config) -> nn.Module:
     in_channels = int(config.get("model.in_channels", 3))
     num_classes = int(config.get("model.num_classes", 1))
     dropout_p = float(config.get("model.dropout_p", 0.0) or 0.0)
+    decoder_dropout_p = float(config.get("model.decoder_dropout_p", 0.0) or 0.0)
     if num_classes < 1:
         raise ConfigError(f"model.num_classes must be >= 1, got {num_classes}")
     if not 0.0 <= dropout_p < 1.0:
         raise ConfigError(f"model.dropout_p must be in [0, 1), got {dropout_p}")
+    if not 0.0 <= decoder_dropout_p < 1.0:
+        raise ConfigError(
+            f"model.decoder_dropout_p must be in [0, 1), got {decoder_dropout_p}"
+        )
 
     if architecture == "smp_unet":
         import segmentation_models_pytorch as smp
@@ -82,6 +87,11 @@ def build_model(config: Config) -> nn.Module:
             activation=None,
         )
         _attach_encoder_dropout(model, dropout_p)
+        if decoder_dropout_p > 0:
+            # switchable decoder dropout: MC-dropout sampling at inference time
+            from .dropout import attach_decoder_dropout
+
+            attach_decoder_dropout(model, decoder_dropout_p)
         return model
 
     if architecture == "monai_segresnet":

@@ -1,0 +1,17 @@
+# -----------------------------------------------------------------------------
+# Data-scaling point: 25 % of the training videos (seeded, whole videos).
+# Everything else is identical to unet_resnet50.yaml, so the only difference to the
+# full-data run is `training.data_fraction`.
+# -----------------------------------------------------------------------------
+defaults:
+  - unet_resnet50.yaml
+
+experiment:
+  name: cvc_clinicdb_unet_resnet50_data025
+  description: "2D polyp segmentation, ResNet-50 UNet, 25 % of the training videos"
+
+model:
+  checkpoint: checkpoints/${experiment.name}/fold{fold}_seed{seed}/best.pt
+
+training:
+  data_fraction: 0.25

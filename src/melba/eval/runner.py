@@ -38,7 +38,7 @@ from melba.metrics import (
     compute_view_uncertainty,
     grid_diagonal_mm,
 )
-from melba.models import build_model, checkpoint_sha256, load_checkpoint
+from melba.models import build_model, checkpoint_sha256, has_mc_dropout, load_checkpoint
 from melba.utils import describe_device, environment_info, get_device, seed_everything
 from melba.utils.provenance import git_revision
 
@@ -260,6 +260,14 @@ def run_evaluation(
         checkpoint_meta = load_checkpoint(model, resolved_checkpoint, device)
     model = model.to(device)
     model.eval()
+
+    stochastic_methods = [method.name for method in methods if method.stochastic]
+    if stochastic_methods and not has_mc_dropout(model):
+        raise ConfigError(
+            f"TTA method(s) {stochastic_methods} request MC-dropout sampling but the model has "
+            "no decoder dropout, so every sample would be identical; train with "
+            "model.decoder_dropout_p > 0 (see configs/cvc_clinicdb/unet_resnet50_dropout.yaml)"
+        )
 
     metric_settings = MetricSettings.from_config(config)
     threshold_value = config.get("inference.threshold", 0.5)
@@ -555,6 +563,7 @@ def _finalise(
                 "name": method.name,
                 "aggregator": method.aggregator,
                 "n_views": method.n_views,
+                "stochastic": method.stochastic,
                 "views": [view.name for view in method.views],
             }
             for method in methods

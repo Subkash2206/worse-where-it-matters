@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from melba.config import Config, ConfigError, load_config, parse_set_args
+from melba.inference import methods_from_config
 
 
 def test_defaults_are_merged_and_references_resolved(base_config: Config, repo_root: Path) -> None:
@@ -115,3 +116,42 @@ def test_all_shipped_configs_load(repo_root: Path) -> None:
         config = load_config(path)
         assert config.require("experiment.name")
         assert config.require("tta.methods")
+
+
+def test_derived_configs_keep_their_own_outputs(repo_root: Path) -> None:
+    """Data-fraction and dropout variants must never write into the base experiment."""
+    base = load_config(repo_root / "configs" / "cvc_clinicdb" / "unet_resnet50.yaml")
+    variants = {
+        "unet_resnet50_data025.yaml": ("cvc_clinicdb_unet_resnet50_data025", 0.25),
+        "unet_resnet50_data050.yaml": ("cvc_clinicdb_unet_resnet50_data050", 0.5),
+        "unet_resnet50_dropout.yaml": ("cvc_clinicdb_unet_resnet50_dropout", 1.0),
+    }
+    for filename, (name, fraction) in variants.items():
+        config = load_config(repo_root / "configs" / "cvc_clinicdb" / filename)
+        assert config["experiment.name"] == name
+        assert float(config["training.data_fraction"]) == fraction
+        assert name in config["model.checkpoint"]
+        assert name in config["evaluation.output_dir"]
+        assert name in config["stats.output_dir"]
+        assert name in config["training.checkpoint_dir"]
+        assert config["evaluation.output_dir"] != base["evaluation.output_dir"]
+
+
+def test_dropout_config_adds_the_mc_dropout_method(repo_root: Path) -> None:
+    config = load_config(repo_root / "configs" / "cvc_clinicdb" / "unet_resnet50_dropout.yaml")
+    assert float(config["model.decoder_dropout_p"]) == 0.2
+    methods = methods_from_config(config)
+    # the four geometric methods are inherited from unet_resnet50.yaml
+    assert [method.name for method in methods] == [
+        "baseline",
+        "tta2",
+        "tta4",
+        "tta8",
+        "mcdropout_8",
+    ]
+    assert all(method.stochastic is False for method in methods[:-1])
+    mc = methods[-1]
+    assert mc.stochastic is True
+    assert mc.n_views == 8
+    assert mc.aggregator == "mean"
+

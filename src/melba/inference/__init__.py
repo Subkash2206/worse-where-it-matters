@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .tta import (
     AGGREGATORS,
+    DEFAULT_MC_SAMPLES,
     TTAMethod,
     aggregate_probabilities,
     logits_to_probabilities,
@@ -15,6 +16,7 @@ from .tta import (
 
 __all__ = [
     "AGGREGATORS",
+    "DEFAULT_MC_SAMPLES",
     "TTAMethod",
     "aggregate_probabilities",
     "logits_to_probabilities",

@@ -9,6 +9,7 @@ import pytest
 from melba.eval import (
     RunFiles,
     aggregate_all,
+    aggregate_output_dir,
     compare_methods,
     detection_table,
     discover_runs,
@@ -272,4 +273,17 @@ def test_aggregate_all_merges_ensemble_with_numeric_csv_ids(toy_dataset_config, 
     assert {"baseline", "tta4", "ensemble3", "ensemble3_tta4"} <= set(detection["method"])
     assert result.paths and "ensemble_comparison" in result.paths
     assert (tmp_path / "aggregate" / "manifest.json").is_file()
+
+
+
+def test_default_aggregate_dir_is_per_experiment(base_config) -> None:
+    """The aggregate step must not overwrite another experiment's tables."""
+    unet = aggregate_output_dir(base_config)
+    swin = aggregate_output_dir(
+        base_config.with_overrides({"experiment.name": "cvc_clinicdb_swinunetr_2d"})
+    )
+    assert unet.name == "aggregate_cvc_clinicdb_unet_resnet50"
+    assert swin.name == "aggregate_cvc_clinicdb_swinunetr_2d"
+    assert unet != swin
+    assert unet.parent.name == "results"
 

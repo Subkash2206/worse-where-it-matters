@@ -363,6 +363,17 @@ def load_ground_truth(
     return ground_truth
 
 
+def aggregate_output_dir(config: Config) -> Path:
+    """Default output directory of the aggregate step, one per experiment.
+
+    Keeping the experiment name in the path means the UNet and SwinUNETR grids (and
+    every data-fraction variant) write their own tables instead of overwriting each
+    other's ``summary.md``.
+    """
+    experiment = str(config.get("experiment.name", "experiment")).strip() or "experiment"
+    return Path("results") / f"aggregate_{experiment}"
+
+
 def write_tables(
     tables: Mapping[str, pd.DataFrame],
     output_dir: str | Path,

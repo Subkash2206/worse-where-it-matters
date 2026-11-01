@@ -29,6 +29,9 @@ number, and its modules have been removed from this repository.
 configs/                     YAML experiment configs (base.yaml + dataset/model configs)
   base.yaml                  shared defaults: seed, paths, metrics, stats, runtime
   cvc_clinicdb/unet_resnet50.yaml    ImageNet ResNet-50 UNet, ImageNet normalization
+  cvc_clinicdb/unet_resnet50_dropout.yaml  same + decoder dropout, MC-dropout ready
+  cvc_clinicdb/unet_resnet50_data025.yaml  25 % of the training videos (sweep)
+  cvc_clinicdb/unet_resnet50_data050.yaml  50 % of the training videos (sweep)
   cvc_clinicdb/swinunetr_2d.yaml     MONAI SwinUNETR (2D, from scratch), dataset statistics
 data/splits/                 frame -> video mapping (yours) and generated fold CSVs
 docs/splits.md               how to provide the CVC-ClinicDB frame → video mapping
@@ -40,6 +43,8 @@ scripts/
   run_grid.py                folds x seeds grid; resumes whatever is incomplete
   run_one.py                 one fold/seed job in its own process (train + evaluate)
   aggregate.py               pooled fold/seed tables, paired stats, seed ensembles
+  compare_models.py          two experiments side by side + residual-error test
+  launch_fraction_sweep.py   data-fraction grids (dry run unless --execute)
   run_stats.py               paired statistics over a per-case CSV
 src/melba/
   config.py                  YAML loading, defaults, ${refs}, overrides, fingerprint
@@ -165,7 +170,10 @@ warm-ups + one timed pass); every other run does exactly one forward pass per vi
 python scripts/aggregate.py --config configs/cvc_clinicdb/unet_resnet50.yaml
 ```
 
-Writes under `results/aggregate/` (CSV per table plus a `summary.md` report):
+Writes under `results/aggregate_<experiment>/` — one directory per experiment
+(`results/aggregate_cvc_clinicdb_unet_resnet50/` for the default config), so the UNet
+and SwinUNETR grids and the data-fraction variants never overwrite each other's tables;
+`--output-dir` overrides it. Contents (CSV per table plus a `summary.md` report):
 
 * `pooled_by_seed.csv` — per method and metric, the pooled 29-video result of each
   seed, the mean and the standard deviation across seeds;
@@ -205,6 +213,56 @@ Writes under `results/aggregate/` (CSV per table plus a `summary.md` report):
 
 Any config value can be overridden without editing files:
 `--set model.checkpoint=checkpoints/x.pt metrics.empty_policy=nan device=cpu`.
+
+## Cross-model comparison (`scripts/compare_models.py`)
+
+```bash
+python scripts/compare_models.py \
+    --configs configs/cvc_clinicdb/unet_resnet50.yaml configs/cvc_clinicdb/swinunetr_2d.yaml
+```
+
+Loads both grids (each fold's per-case CSVs plus the probability maps for
+`ensemble3`, and the reference masks once, since both models are evaluated on the same
+folds) and writes to `results/compare_models/`:
+
+* `methods.csv` — `baseline` / `tta4` / `tta8` / `ensemble3`, Dice / BF1 / HD95, per
+  model, as mean ± std over the 29 videos;
+* `deltas.csv` — the paired tests of `scripts/aggregate.py` (Wilcoxon, bootstrap CI of
+  the mean delta, rank-biserial effect size, Holm) against each model's own baseline;
+* `detection.csv` — missed-detection rates, transitions and exact McNemar per model;
+* `tails.csv` — HD95 percentiles and failure rates (HD95 > 50 px, Dice < 0.5) per model;
+* `residual_error.csv` — the **residual-error test** reviewers ask for: per case,
+  `Spearman(baseline error, delta)` with `delta = tta4 − baseline`, both for HD95
+  (restricted to cases non-empty under both methods) and for Dice (all cases). Rows are
+  per model plus one row pooled over both models. The CI is a **video-cluster
+  bootstrap** (videos are resampled as blocks, so frames of one video — and, in the
+  pooled row, the two models' predictions for the same frame — stay together), and the
+  bootstrap p-value is reported next to the analytic Spearman p. A negative rho is the
+  interesting case: the improvement grows as the baseline gets worse (HD95 deltas become
+  more negative, Dice deltas shrink towards zero on easy cases), i.e. the gain is not
+  confined to cases the baseline already solved;
+* `comparison.md` — all of the above as one markdown report.
+
+## Data-fraction sweep (configs only)
+
+Two configs answer "how much of the TTA gain survives less training data?" by changing
+only `training.data_fraction` (a seeded fraction of whole training **videos**, so no
+frame of a held-out video leaks into training):
+
+* `configs/cvc_clinicdb/unet_resnet50_data025.yaml` — 25 % of the training videos;
+* `configs/cvc_clinicdb/unet_resnet50_data050.yaml` — 50 % of the training videos
+  (100 % is the parent `unet_resnet50.yaml`).
+
+Each variant has its own `experiment.name`, hence its own checkpoint, evaluation, stats
+and `results/aggregate_<experiment>/` directories — nothing overwrites the full-data run.
+The launcher is dry by design:
+
+```bash
+python scripts/launch_fraction_sweep.py            # prints the two run_grid commands
+python scripts/launch_fraction_sweep.py --execute  # starts them detached, folds 0-4, seed 0
+```
+
+No fraction runs have been launched yet (one GPU job at a time).
 
 ## Metric definitions
 
@@ -275,6 +333,33 @@ to `evaluation.probability_map_dir/fold<k>_seed<s>/<case>__<method>__mean.npy`
 (native grid, gitignored). Those maps are what `scripts/aggregate.py` averages into
 the `ensemble3` / `ensemble3_tta4` predictions; `evaluation.save_variance_maps: true`
 additionally writes `*__var.npy`.
+
+### MC-dropout (`mcdropout_T`)
+
+A method named `mcdropout` or `mcdropout_T` (default `T = 8`) is a **stochastic**
+method: it expands into `T` identity views and the runner switches **decoder dropout**
+on for those forward passes while keeping the model in `eval()` mode, so BatchNorm keeps
+using its running statistics and never updates them. The `T` per-sample probability
+maps go through exactly the same aggregation and uncertainty code as geometric views,
+so `entropy_mean`, `variance_mean`, `view_disagreement`, ... are populated as usual and
+`mcdropout_T` sits in the same tables as `tta4`/`tta8`.
+
+Add it to a config without redeclaring the geometric methods:
+
+```yaml
+model:
+  decoder_dropout_p: 0.2       # switchable decoder dropout (training + MC sampling)
+tta:
+  extra_methods:
+    - mcdropout_8
+```
+
+`model.dropout_p` is the *encoder-feature* dropout used during training (state-dict
+keys unchanged); `model.decoder_dropout_p` is the one MC sampling can switch on. A model
+trained without it produces identical "samples", so the runner raises `ConfigError`
+instead of writing a zero-variance uncertainty column. `configs/cvc_clinicdb/unet_resnet50_dropout.yaml`
+is the ready-to-train variant (decoder dropout 0.2, `mcdropout_8` added); no MC-dropout
+runs have been launched yet.
 
 ## Normalization
 
@@ -404,7 +489,12 @@ colour loading of the real TIFFs (3 distinct channels, native `288x384`, mask
 binarisation at 127). Grid robustness is covered too: a child process per run, the
 CUDA-vs-other failure classification, retries with GPU cleanup, exhausted retries
 being reported instead of raised, and `run_one.py` training then reporting
-"nothing to do" end-to-end.
+"nothing to do" end-to-end. The uncertainty extensions add: MC-dropout sampling that
+keeps BatchNorm statistics frozen (and dropout off again after each run), `T` differing
+samples, `mcdropout_T`/`extra_methods` expansion, the runner refusing stochastic methods
+on a model without decoder dropout, the per-experiment aggregate directory, the derived
+data-fraction/dropout configs, and the cross-model tables including the residual-error
+test with its video-cluster bootstrap CI.
 
 ## Status / next steps
 
@@ -414,7 +504,15 @@ being reported instead of raised, and `run_one.py` training then reporting
   were archived to `archive_grayscale/` and are invalid.
 * `configs/cvc_clinicdb/swinunetr_2d.yaml` (MONAI SwinUNETR, `spatial_dims=2`, from
   scratch, per-fold training statistics) and its factory branch are implemented and
-  unit-tested, but no SwinUNETR results have been produced yet.
+  unit-tested; the 5 folds x 3 seeds grid is running (same protocol and evaluation code
+  as the UNet grid). Aggregate it separately with
+  `python scripts/aggregate.py --config configs/cvc_clinicdb/swinunetr_2d.yaml`
+  (default output `results/aggregate_cvc_clinicdb_swinunetr_2d/`) and compare with
+  `python scripts/compare_models.py --configs configs/cvc_clinicdb/unet_resnet50.yaml
+  configs/cvc_clinicdb/swinunetr_2d.yaml`.
+* MC-dropout (`mcdropout_T`, `configs/cvc_clinicdb/unet_resnet50_dropout.yaml`) and the
+  data-fraction sweep (`data025` / `data050`) are implemented, tested and ready to
+  launch; neither has been run (GPU is busy with the SwinUNETR grid, one job at a time).
 * BraTS 2021 (3D) is **not started**: it needs an NIfTI reader and sliding-window
   inference. The `monai_segresnet` branch exists but has no dataset reader.
 * The CVC-ClinicDB frame → sequence grouping is built reproducibly from the official

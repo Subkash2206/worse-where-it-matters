@@ -1,0 +1,32 @@
+# -----------------------------------------------------------------------------
+# CVC-ClinicDB, 2D UNet (ResNet-50) trained with decoder dropout, for MC-dropout
+# uncertainty.  Everything else is identical to unet_resnet50.yaml.
+#
+# Two different dropouts exist in this repository:
+#   * model.dropout_p        - dropout on the encoder features, active during training
+#                              only (state-dict keys unchanged);
+#   * model.decoder_dropout_p- spatial dropout after every decoder block, active during
+#                              training AND switchable at inference by the `mcdropout_T`
+#                              TTA method (BatchNorm stays in eval mode).
+# A model trained without decoder dropout cannot be sampled: every MC sample would be
+# identical, and scripts/evaluate.py refuses such a config.
+# -----------------------------------------------------------------------------
+defaults:
+  - unet_resnet50.yaml
+
+experiment:
+  name: cvc_clinicdb_unet_resnet50_dropout
+  description: "2D polyp segmentation, ResNet-50 UNet with decoder dropout (MC-dropout ready)"
+
+model:
+  dropout_p: 0.2              # encoder-feature dropout (training only)
+  decoder_dropout_p: 0.2      # switchable decoder dropout (MC-dropout at inference)
+  checkpoint: checkpoints/${experiment.name}/fold{fold}_seed{seed}/best.pt
+
+training:
+  monitor: val_dice
+
+tta:
+  # the four geometric methods are inherited; add the stochastic sampler (T = 8)
+  extra_methods:
+    - mcdropout_8

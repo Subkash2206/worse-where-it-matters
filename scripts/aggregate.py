@@ -35,6 +35,7 @@ from melba.config import ConfigError, load_config, parse_set_args  # noqa: E402
 from melba.eval import (  # noqa: E402
     TailThresholds,
     aggregate_all,
+    aggregate_output_dir,
     discover_runs,
     frames_by_seed,
     per_fold_table,
@@ -61,7 +62,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
     parser.add_argument("--per-case-dir", default=None, help="directory with the per-case CSVs")
     parser.add_argument("--maps-dir", default=None, help="root of the probability maps")
-    parser.add_argument("--output-dir", default=None, help="default: results/aggregate")
+    parser.add_argument("--output-dir", default=None, help="default: results/aggregate_<experiment>")
     parser.add_argument("--unit", default=None, choices=["group", "case"], help="pairing unit")
     parser.add_argument("--treatments", nargs="+", default=["tta2", "tta4", "tta8"])
     parser.add_argument("--control", default="baseline")
@@ -361,7 +362,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.output_dir:
         output_dir: Path | None = Path(args.output_dir)
     else:
-        output_dir = _REPO_ROOT / "results" / "aggregate"
+        # one directory per experiment, so the UNet and SwinUNETR grids never overwrite
+        # each other's tables
+        output_dir = _REPO_ROOT / aggregate_output_dir(config)
 
     try:
         result = aggregate_all(
