@@ -350,6 +350,50 @@ A grid can also be driven alone (`python scripts/run_grid.py --config ... --stat
 prints the state of every run), and the queue file can be edited between runs; re-running
 it is always safe.
 
+## Status report (`scripts/status.py`)
+
+```bash
+python scripts/status.py                # everything
+python scripts/status.py --tail 8       # more lines of the active job's log
+python scripts/status.py --only swin dropout
+```
+
+One compact, read-only report — it imports neither torch nor the GPU stack, writes
+nothing and takes a few seconds:
+
+```
+MELBA status  2026-11-01 16:42  (read-only, CPU only)
+queue   overnight  ALIVE pid 31804      waiting for cvc_swin_grid.pid (pid 29940)
+grid    cvc_swin_grid          ALIVE pid 29940 (python)
+stale   view_agreement_unet (29860), view_agreement_unet_catchup (27840)
+
+experiment                            runs  failed  current                            valDice      ETA
+unet                                 15/15    0+1r  -                            0.8725/0.8094       0s
+swin                                 11/15       0  fold3/seed2                  0.7021/0.5809  49m 11s
+dropout                               0/15       0  -                                        -        ?
+...
+```
+
+* `runs` = evaluated runs / planned runs (`evaluation` marker present, the same test
+  `run_grid.py` uses to skip a run);
+* `failed` counts failures that are *still* unresolved (`ERROR fold f seed s` in the grid
+  log whose run has no evaluation yet); `+Nr` means the grid retried N of them and the
+  retry/resume succeeded;
+* `current` is the run the grid log points at, with its epoch (`training_log.csv` only
+  exists once a run finishes, so mid-training progress is read from the log's
+  `[train] epoch e/E` lines);
+* `valDice` = best single run / mean of the per-run bests, both read from
+  `run_done.json` (finished runs) and the log (the active run);
+* `ETA` = median finished-run wall-clock × pending runs, except for the active run, which
+  pays only for its remaining epochs (per-epoch time from the log);
+* liveness comes from `logs/*.pid` **with the image name checked**
+  (`melba.pidfile.pid_alive`), because Windows recycles pids — a stale pid file pointing
+  at an unrelated process is reported as `stale` instead of `ALIVE`;
+* the last `--tail` (default 3) non-empty lines of the active job's log are printed last.
+
+`brats` is listed with `config missing` until the 3D milestone gets a config, so an
+experiment can never silently disappear from the report.
+
 ## Metric definitions
 
 Computed per case, on the **native image grid** (predictions are resampled back to

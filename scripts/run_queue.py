@@ -51,31 +51,16 @@ from typing import Any, Mapping, Sequence
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT / "src") not in sys.path:  # pragma: no cover - import side effect
+    sys.path.insert(0, str(_REPO_ROOT / "src"))
+
+from melba.pidfile import LAUNCHER_PROCESS_NAMES, pid_alive, read_pid_file  # noqa: E402
 
 STEP_KINDS: tuple[str, ...] = ("grid", "aggregate", "compare")
 
 
 def _stamp() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _pid_alive(pid: int) -> bool:
-    """True when a process with ``pid`` exists (never signals the process)."""
-    if pid <= 0:
-        return False
-    if os.name == "nt":  # pragma: no cover - platform branch
-        result = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {int(pid)}", "/NH"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        return str(int(pid)) in (result.stdout or "")
-    try:  # pragma: no cover - platform branch
-        os.kill(int(pid), 0)
-    except OSError:
-        return False
-    return True
 
 
 def load_queue(path: str | Path) -> dict[str, Any]:
@@ -179,12 +164,8 @@ def wait_for_pid_file(
     deadline = time.time() + float(max_wait_hours) * 3600.0
     announced = False
     while True:
-        pid = 0
-        try:
-            pid = int(pid_file.read_text(encoding="utf-8").strip() or 0)
-        except (OSError, ValueError):
-            pid = 0
-        if pid and _pid_alive(pid):
+        pid = read_pid_file(pid_file)
+        if pid and pid_alive(pid, names=LAUNCHER_PROCESS_NAMES):
             if not announced:
                 log(
                     f"waiting for {pid_file.name} (pid {pid}) to finish before starting the "
