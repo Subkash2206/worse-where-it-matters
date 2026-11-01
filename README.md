@@ -308,6 +308,40 @@ python scripts/launch_fraction_sweep.py --execute  # starts them detached, folds
 
 No fraction runs have been launched yet (one GPU job at a time).
 
+## Overnight queue (`scripts/run_queue.py`)
+
+One GPU job at a time is a hard rule, so unattended work is expressed as a queue in
+`queues/overnight.yaml`: a `wait_for_pid_file` guard, then grid steps, then CPU-only
+post-processing. Each grid step is a plain `scripts/run_grid.py` call with its own
+`logs/<name>_grid.log` and `logs/<name>_grid.pid`, so per-run retries, `last.pt` resume
+and "trained but not evaluated" recovery behave exactly as in a manual launch; a grid
+that comes back non-zero is re-launched once (it resumes).
+
+```bash
+python scripts/run_queue.py --queue queues/overnight.yaml --dry-run   # plan only
+python scripts/run_queue.py --queue queues/overnight.yaml             # run it
+python scripts/run_queue.py --queue queues/overnight.yaml --only compare_unet_swin
+```
+
+```powershell
+# check progress (queue + the grid it is currently running)
+Get-Content logs\overnight.log -Tail 20
+Get-Content logs\overnight_summary.json -ErrorAction SilentlyContinue
+$step = (Get-ChildItem logs\*_grid.pid | Sort-Object LastWriteTime | Select-Object -Last 1)
+"$($step.Name) -> pid $(Get-Content $step.FullName)"; Get-Content $step.BaseName.log -Tail 5
+
+# stop everything the queue started (queue -> run_grid -> run_one, deepest first)
+function Stop-Tree([int]$Id) { Get-CimInstance Win32_Process -Filter "ParentProcessId=$Id" | ForEach-Object { Stop-Tree $_.ProcessId }; Stop-Process -Id $Id -Force -ErrorAction SilentlyContinue }
+Stop-Tree (Get-Content logs\overnight.pid)
+
+# resume: start the same queue again — finished runs are skipped, interrupted ones continue
+python scripts\run_queue.py --queue queues\overnight.yaml
+```
+
+A grid can also be driven alone (`python scripts/run_grid.py --config ... --status-only`
+prints the state of every run), and the queue file can be edited between runs; re-running
+it is always safe.
+
 ## Metric definitions
 
 Computed per case, on the **native image grid** (predictions are resampled back to

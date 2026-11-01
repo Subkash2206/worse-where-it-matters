@@ -1,0 +1,76 @@
+# -----------------------------------------------------------------------------
+# Overnight queue: one detached process, one GPU job at a time.
+#
+#   python scripts/run_queue.py --queue queues/overnight.yaml --dry-run
+#   python scripts/run_queue.py --queue queues/overnight.yaml
+#
+# The guard waits for the SwinUNETR grid (its pid file) to be gone before the first
+# grid starts, so two trainings never share the 6 GB GPU.  Stopping that job releases
+# the guard within one poll (2 min).  Grid steps get `logs/<name>_grid.log` and
+# `logs/<name>_grid.pid`; the queue itself is `logs/overnight.log`,
+# `logs/overnight.pid` and `logs/overnight_summary.json`.  Re-running the same command
+# resumes: run_grid skips finished runs, continues training from `last.pt` and only
+# re-evaluates runs whose evaluation is missing.
+# -----------------------------------------------------------------------------
+name: overnight
+
+wait_for_pid_file: logs/cvc_swin_grid.pid
+max_wait_hours: 14
+
+steps:
+  # 1) MC-dropout grid: same protocol as the UNet grid, decoder dropout on, mcdropout_8
+  #    added to the four geometric methods (folds 0-4 x seeds 0,1,2).
+  - name: cvc_clinicdb_unet_resnet50_dropout
+    kind: grid
+    config: configs/cvc_clinicdb/unet_resnet50_dropout.yaml
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    epochs: 100
+    patience: 20
+    retries: 3
+    attempts: 2          # whole-grid re-launch if run_grid exits non-zero (it resumes)
+
+  # 2) Data-fraction sweep: 25 % and 50 % of the training videos, one seed.
+  - name: cvc_clinicdb_unet_resnet50_data025
+    kind: grid
+    config: configs/cvc_clinicdb/unet_resnet50_data025.yaml
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0]
+    epochs: 100
+    patience: 20
+    retries: 3
+    attempts: 2
+
+  - name: cvc_clinicdb_unet_resnet50_data050
+    kind: grid
+    config: configs/cvc_clinicdb/unet_resnet50_data050.yaml
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0]
+    epochs: 100
+    patience: 20
+    retries: 3
+    attempts: 2
+
+  # 3) CPU-only post-processing, so the tables are ready in the morning.
+  - name: aggregate_swinunetr
+    kind: aggregate
+    config: configs/cvc_clinicdb/swinunetr_2d.yaml
+
+  - name: aggregate_dropout
+    kind: aggregate
+    config: configs/cvc_clinicdb/unet_resnet50_dropout.yaml
+
+  - name: aggregate_data025
+    kind: aggregate
+    config: configs/cvc_clinicdb/unet_resnet50_data025.yaml
+
+  - name: aggregate_data050
+    kind: aggregate
+    config: configs/cvc_clinicdb/unet_resnet50_data050.yaml
+
+  - name: compare_unet_swin
+    kind: compare
+    configs:
+      - configs/cvc_clinicdb/unet_resnet50.yaml
+      - configs/cvc_clinicdb/swinunetr_2d.yaml
+    labels: [unet, swin]
