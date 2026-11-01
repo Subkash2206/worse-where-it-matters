@@ -10,13 +10,18 @@ derives, per case and method:
 * ``view_disagreement`` — fraction of pixels where the binarised views do not all
   agree;
 * ``per_view_dice_mean`` / ``per_view_dice_std`` — mean and standard deviation of
-  the Dice coefficient of each binarised view against the consensus map.
+  the Dice coefficient of each binarised view against the consensus map;
+* ``view_pairwise_dice`` — mean Dice over every *pair* of binarised views (1.0 for a
+  single view), the view-agreement score used as a failure detector by
+  :mod:`melba.eval.uncertainty_audit`.
 
 These are *not* ground-truth metrics, so they are computed outside
 :func:`melba.metrics.compute_case_metrics` but written to the same long-format CSV.
 """
 
 from __future__ import annotations
+
+from itertools import combinations
 
 import numpy as np
 from scipy import ndimage
@@ -28,6 +33,7 @@ __all__ = [
     "binarized_views",
     "compute_view_uncertainty",
     "foreground_band",
+    "mean_pairwise_dice",
     "per_view_consensus_dice",
     "predictive_entropy_map",
     "view_disagreement_fraction",
@@ -42,6 +48,7 @@ UNCERTAINTY_METRICS: tuple[str, ...] = (
     "view_disagreement",
     "per_view_dice_mean",
     "per_view_dice_std",
+    "view_pairwise_dice",
 )
 
 _EPS = 1e-7
@@ -115,6 +122,22 @@ def per_view_consensus_dice(
     return float(scores.mean()), float(scores.std(ddof=0))
 
 
+def mean_pairwise_dice(per_view: np.ndarray, threshold: float = 0.5) -> float:
+    """Mean Dice over every unordered pair of binarised views.
+
+    Unlike :func:`per_view_consensus_dice` (each view against the *consensus*), this
+    compares the views with each other, so it estimates how much the TTA members
+    agree without letting the averaged map blur their disagreement away.  A single
+    view trivially agrees with itself and returns 1.0 (i.e. no measurable spread).
+    """
+    masks = binarized_views(per_view, threshold)
+    if masks.shape[0] < 2:
+        return 1.0
+    pairs = combinations(range(masks.shape[0]), 2)
+    scores = [dice(masks[first], masks[second]) for first, second in pairs]
+    return float(np.mean(scores))
+
+
 def compute_view_uncertainty(
     per_view: np.ndarray,
     *,
@@ -144,4 +167,5 @@ def compute_view_uncertainty(
         "view_disagreement": view_disagreement_fraction(array, threshold),
         "per_view_dice_mean": dice_mean,
         "per_view_dice_std": dice_std,
+        "view_pairwise_dice": mean_pairwise_dice(array, threshold),
     }

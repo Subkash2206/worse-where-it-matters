@@ -6,9 +6,16 @@ Produces under ``results/compare_models/``:
 * ``deltas.csv`` — paired tests vs each model's own baseline (video level);
 * ``detection.csv`` — missed detections, transitions and exact McNemar per model;
 * ``tails.csv`` — HD95 percentiles and failure rates per model;
-* ``residual_error.csv`` — Spearman(baseline error, TTA delta) per model and pooled over
-  both models, with video-cluster bootstrap CIs (the residual-error test);
+* ``residual_error.csv`` — the residual-error test: primary = Oldham's
+  ``Spearman((control + treatment)/2, treatment - control)`` with a video-cluster
+  bootstrap CI and a paired-swap permutation null; secondary = the regression-to-the-mean
+  biased ``Spearman(control, delta)``; per model and pooled over both;
+* ``gain_difference.csv`` — between-model test of the video-level TTA gain (Wilcoxon +
+  paired bootstrap CI on ``gain_compared - gain_reference``); requires two configs;
 * ``comparison.md`` — all of the above rendered as markdown.
+
+A single ``--configs`` entry is allowed: the per-model residual-error rows are still
+computed (the pooled and between-model rows need two models).
 
 Usage
 -----
@@ -31,6 +38,7 @@ from melba.eval import (  # noqa: E402
     TailThresholds,
     deltas_table,
     detection_table,
+    gain_difference_table,
     load_ground_truth,
     load_model,
     method_table,
@@ -47,7 +55,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--configs", nargs="+", required=True, help="two (or more) experiment YAMLs")
+    parser.add_argument(
+        "--configs", nargs="+", required=True, help="experiment YAMLs (one or more)"
+    )
     parser.add_argument("--labels", nargs="+", default=None, help="short names for the models")
     parser.add_argument("--folds", type=int, nargs="+", default=None)
     parser.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
@@ -55,6 +65,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--treatment", default="tta4")
     parser.add_argument("--output-dir", default=None, help="default: results/compare_models")
     parser.add_argument("--n-bootstrap", type=int, default=2000)
+    parser.add_argument(
+        "--n-permutations",
+        type=int,
+        default=10000,
+        help="paired-swap permutations for the residual-error null",
+    )
     parser.add_argument("--set", dest="overrides", nargs="*", default=[], metavar="KEY=VALUE")
     return parser.parse_args(argv)
 
@@ -71,8 +87,8 @@ def _print(table, columns=None, max_rows: int = 40, title: str = "") -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    if len(args.configs) < 2:
-        print("ERROR: --configs needs at least two experiment configs", file=sys.stderr)
+    if not args.configs:
+        print("ERROR: --configs needs at least one experiment config", file=sys.stderr)
         return 2
     if args.labels is not None and len(args.labels) != len(args.configs):
         print("ERROR: --labels must match --configs in length", file=sys.stderr)
@@ -136,6 +152,13 @@ def main(argv: list[str] | None = None) -> int:
             treatment=args.treatment,
             control=args.control,
             n_bootstrap=args.n_bootstrap,
+            n_permutations=args.n_permutations,
+        ),
+        "gain_difference": gain_difference_table(
+            models,
+            treatment=args.treatment,
+            control=args.control,
+            n_bootstrap=args.n_bootstrap,
         ),
     }
 
@@ -170,12 +193,23 @@ def main(argv: list[str] | None = None) -> int:
         tables["residual_error"],
         columns=[
             "scope", "metric", "restriction", "n_cases", "n_clusters", "delta_mean",
-            "spearman_rho", "ci_low", "ci_high", "spearman_p", "p_bootstrap",
+            "rho_oldham", "ci_low_oldham", "ci_high_oldham", "p_oldham",
+            "null_mean_oldham", "p_permutation_oldham",
+            "rho_naive", "ci_low_naive", "ci_high_naive", "p_naive",
         ],
         title=(
-            f"(5) residual-error test: Spearman(baseline error, "
-            f"{args.treatment} - {args.control})"
+            f"(5) residual-error test: Oldham (({args.control}+{args.treatment})/2 vs "
+            f"{args.treatment}-{args.control}) + paired-swap null; "
+            "`*_naive` = regression-to-the-mean biased Spearman(control, delta)"
         ),
+    )
+    _print(
+        tables["gain_difference"],
+        columns=[
+            "metric", "reference", "compared", "n_units", "gain_reference", "gain_compared",
+            "delta_gain", "ci_low", "ci_high", "p_value", "favours", "better_model",
+        ],
+        title="(6) between-model TTA gain difference (paired by video), needs 2 models",
     )
 
     paths = write_tables(
@@ -192,6 +226,7 @@ def main(argv: list[str] | None = None) -> int:
             "control": args.control,
             "treatment": args.treatment,
             "n_bootstrap": args.n_bootstrap,
+            "n_permutations": args.n_permutations,
             "git_revision": git_revision(),
         },
     )
@@ -222,9 +257,22 @@ def main(argv: list[str] | None = None) -> int:
         (
             "(5) Residual-error test",
             tables["residual_error"],
-            "Spearman between the baseline error and the TTA delta per case: a negative "
-            "rho for HD95 (positive for Dice) means TTA helps most where the baseline is "
-            "weakest. `pooled_models` repeats it over both models; CIs resample videos.",
+            "Primary: Oldham's `Spearman((control + treatment)/2, treatment - control)`, "
+            "which removes the regression-to-the-mean bias of the naive "
+            "`Spearman(control, delta)` (kept as `*_naive`, secondary), plus a paired-swap "
+            "permutation null (`null_mean_*`, `p_permutation_*`: whole videos swapped, "
+            "10k draws). `delta = treatment - control`, so a negative rho means the gain is "
+            "larger where the control was worse, for HD95 and Dice alike. "
+            "`pooled_models` repeats it over both models; every CI resamples videos.",
+        ),
+        (
+            "(6) Between-model gain difference",
+            tables["gain_difference"],
+            "Per video, `gain = treatment - control` inside each model; the models are "
+            "paired by video and `delta_gain = compared - reference` is tested with a "
+            "Wilcoxon signed-rank test and a paired video bootstrap CI. `favours` names "
+            "the model with the larger gain, `better_model` the model with the better "
+            "mean score (the two differ when both gains are negative). Needs two configs.",
         ),
     ]
     summary = write_markdown(

@@ -197,8 +197,8 @@ and SwinUNETR grids and the data-fraction variants never overwrite each other's 
 * `uncertainty.csv` — Spearman rho of `view_disagreement` / `entropy_mean_roi`
   against HD95 and 1-Dice, plus AUROC for detecting failures;
 * `uncertainty_audit_*.csv` — the audit of those descriptors: ROI diagnostics for the
-  failures (empty / near-empty / size buckets), AUROC under three failure definitions
-  (all, non-missed, missed-only) with video-cluster bootstrap CIs, explicit
+  failures (empty / near-empty / size buckets), AUROC **and AURC** under three failure
+  definitions (all, non-missed, missed-only) with video-cluster bootstrap CIs, explicit
   `n_used`/`n_undefined` counts and NaN bounds, Spearman for every predictor, and
   paired bootstrap tests against trivial baselines (predicted area, 1 − confidence,
   image entropy, single-view entropy) and the seed-ensemble entropy/variance. Every
@@ -208,8 +208,40 @@ and SwinUNETR grids and the data-fraction variants never overwrite each other's 
   labels (`label_source: tta4`) for comparison. The ROI descriptors are **undefined
   for an empty prediction**, so a plain AUROC silently drops missed detections — this
   table makes that explicit;
+* AURC (`aurc`, `aurc_ci_low`, `aurc_ci_high`) is the area under the risk-coverage
+  curve of a detector with `risk = 1 − Dice` of the prediction it scores, i.e. the mean
+  selective risk when the most confident cases are kept first (ties are averaged inside
+  the tie block, so the value does not depend on an arbitrary tie-break). Lower is
+  better. `aurc_optimal` orders the same cohort by its own risk (the oracle lower
+  bound), `aurc_excess` is the gap to it, and `aurc_if_missed_is_worst` repeats the
+  point estimate with missed detections counted as risk 1 instead of being dropped
+  (`n_used_aurc` / `n_undefined_aurc` say how many cases each value used);
+* **agreement detectors**: `tta4_view_dice_disagreement` = 1 − mean pairwise Dice
+  between the four tta4 views, `ensemble3_dice_disagreement` and
+  `ensemble3_tta4_dice_disagreement` = the same over the three seeds' baseline / tta4
+  maps. The seed-map versions come from the saved probability maps; the view version
+  needs per-view masks, which the runner does not store, so it is read from a separate
+  CPU re-run (below). The paired tests table compares
+  `tta4_view_dice_disagreement` against the single-view ROI entropy and against
+  1 − confidence on **both** AUROC and AURC with one shared video-cluster resampling
+  (`delta_aurc < 0` means the first detector is the better one);
 * `per_fold_baseline.csv` — fold-to-fold spread of the control method;
 * `summary.md` — all of the above rendered as markdown with the protocol notes.
+
+The view-agreement descriptor needs the individual view predictions, so it is produced
+by re-running tta4 only, on CPU, into its own directory:
+
+```bash
+for fold in 0 1 2 3 4; do for seed in 0 1 2; do
+  python scripts/evaluate.py --config configs/cvc_clinicdb/unet_resnet50_view_agreement.yaml \
+      --fold $fold --set seed=$seed --no-progress
+done; done
+```
+
+`scripts/aggregate.py` picks up `results/<experiment>/view_agreement/evaluation/*.csv`
+automatically (override with `--view-agreement-dir`, skip with `--no-view-agreement`)
+and averages `view_pairwise_dice` per case over the seeds. Without it the detector is
+NaN and a note in `summary.md` says why.
 
 Any config value can be overridden without editing files:
 `--set model.checkpoint=checkpoints/x.pt metrics.empty_policy=nan device=cpu`.
@@ -231,16 +263,28 @@ folds) and writes to `results/compare_models/`:
   the mean delta, rank-biserial effect size, Holm) against each model's own baseline;
 * `detection.csv` — missed-detection rates, transitions and exact McNemar per model;
 * `tails.csv` — HD95 percentiles and failure rates (HD95 > 50 px, Dice < 0.5) per model;
-* `residual_error.csv` — the **residual-error test** reviewers ask for: per case,
-  `Spearman(baseline error, delta)` with `delta = tta4 − baseline`, both for HD95
-  (restricted to cases non-empty under both methods) and for Dice (all cases). Rows are
-  per model plus one row pooled over both models. The CI is a **video-cluster
-  bootstrap** (videos are resampled as blocks, so frames of one video — and, in the
-  pooled row, the two models' predictions for the same frame — stay together), and the
-  bootstrap p-value is reported next to the analytic Spearman p. A negative rho is the
-  interesting case: the improvement grows as the baseline gets worse (HD95 deltas become
-  more negative, Dice deltas shrink towards zero on easy cases), i.e. the gain is not
-  confined to cases the baseline already solved;
+* `residual_error.csv` — the **residual-error test** reviewers ask for. Correlating the
+  control error with `delta = tta4 − baseline` is biased towards a negative rho by
+  regression to the mean, so the **primary** statistics are (a) **Oldham's method**,
+  `Spearman((baseline + tta4)/2, tta4 − baseline)` — the x-axis becomes the mean of the
+  pair, which is what removes that bias — and (b) a **paired-swap permutation null**:
+  within each permutation whole *videos* are swapped (all of their cases exchange
+  baseline and tta4, so the within-video dependence survives), `delta` flips sign and
+  both statistics are recomputed (`n_permutations`, default 10 000); the table reports
+  the null mean and the two-sided `|rho_perm| ≥ |rho_obs|` p-value. The raw
+  `Spearman(baseline, delta)` is kept as the explicitly secondary `rho_naive` column.
+  Both metrics are covered (HD95 on cases non-empty under both methods, Dice on all
+  cases), rows are per model plus one row pooled over both models, and every CI is a
+  **video-cluster bootstrap** (videos resampled as blocks). `delta = treatment −
+  control`, so a negative rho means the gain grows as the control gets worse — for HD95
+  and Dice alike;
+* `gain_difference.csv` — the **between-model** question: is the mean video-level TTA
+  gain of one model different from the other's? `gain = tta4 − baseline` per case,
+  averaged per video inside each model, paired by video, tested with a Wilcoxon
+  signed-rank test and a paired video bootstrap CI of `delta_gain = compared −
+  reference` (`favours` names the model with the larger gain, `better_model` the model
+  with the better score). Needs two `--configs`; with one config the per-model
+  residual-error rows are still produced;
 * `comparison.md` — all of the above as one markdown report.
 
 ## Data-fraction sweep (configs only)
@@ -324,6 +368,8 @@ resampling onto the native grid) and writes, per case and method:
 * `view_disagreement` — fraction of pixels where the binarised views disagree;
 * `per_view_dice_mean`, `per_view_dice_std` — Dice of each view against the
   consensus map;
+* `view_pairwise_dice` — mean Dice over every *pair* of binarised views (1.0 for a
+  single view); the view-agreement detector used by the uncertainty audit;
 * `latency_ms`, `peak_memory_mb` — wall-clock per case (3 warm-up passes, CUDA
   synchronised) and `torch.cuda.max_memory_allocated` for that view count.
 
@@ -493,8 +539,13 @@ being reported instead of raised, and `run_one.py` training then reporting
 keeps BatchNorm statistics frozen (and dropout off again after each run), `T` differing
 samples, `mcdropout_T`/`extra_methods` expansion, the runner refusing stochastic methods
 on a model without decoder dropout, the per-experiment aggregate directory, the derived
-data-fraction/dropout configs, and the cross-model tables including the residual-error
-test with its video-cluster bootstrap CI.
+data-fraction/dropout configs, and the cross-model tables. The detector and
+residual-error work adds: AURC of a ranking (hand-computed values, tie-invariance and
+the oracle lower bound), the paired AUROC/AURC bootstrap, pairwise-Dice agreement over
+views and seeds, `load_view_agreement` averaging seeds from a directory of per-case
+CSVs, Oldham's mean-vs-change correlation and the paired-swap permutation null, plus a
+zero-true-effect simulation in which the naive rho is significantly negative while
+Oldham's rho and the swap null are not, and a between-model gain difference.
 
 ## Status / next steps
 

@@ -65,6 +65,7 @@ metrics:
     - view_disagreement
     - per_view_dice_mean
     - per_view_dice_std
+    - view_pairwise_dice      # mean Dice over every pair of views (view agreement)
   hd_percentile: 95.0
   connectivity: 1               # surface connectivity (1 = 6-neighbourhood in 3D)
   boundary_tolerance_mm: 2.0

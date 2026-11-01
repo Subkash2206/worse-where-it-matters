@@ -1,6 +1,6 @@
 """Pool the whole cross-validation grid: seeds, folds, paired stats and seed ensembles.
 
-Produces (under ``stats.output_dir/aggregate`` by default):
+Produces (under ``results/aggregate_<experiment>/`` by default):
 
 * ``pooled_by_seed`` - per method and metric, the mean of the pooled 29-video results
   per seed, the standard deviation across seeds and each seed's value;
@@ -38,6 +38,7 @@ from melba.eval import (  # noqa: E402
     aggregate_output_dir,
     discover_runs,
     frames_by_seed,
+    load_view_agreement,
     per_fold_table,
     pooled_method_table,
     run_uncertainty_audit,
@@ -46,6 +47,7 @@ from melba.eval import (  # noqa: E402
     string_ids,
     tail_table,
     uncertainty_table,
+    view_agreement_dir,
 )
 from melba.stats import pool_folds  # noqa: E402
 from melba.utils import git_revision  # noqa: E402
@@ -71,6 +73,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--no-ensemble", action="store_true", help="skip the seed ensembles (maps not needed)"
+    )
+    parser.add_argument(
+        "--view-agreement-dir",
+        default=None,
+        help=(
+            "per-case CSVs of the tta4 view-agreement re-run "
+            "(default: results/<experiment>/view_agreement/evaluation)"
+        ),
+    )
+    parser.add_argument(
+        "--no-view-agreement",
+        action="store_true",
+        help="skip the pairwise-Dice detectors even if the view-agreement CSVs exist",
     )
     parser.add_argument("--set", dest="overrides", nargs="*", default=[], metavar="KEY=VALUE")
     return parser.parse_args(argv)
@@ -243,7 +258,7 @@ def _write_summary_markdown(
                     "NaNs would silently drop missed detections from any correlation/AUROC.",
                 ),
                 (
-                    "(f-audit) AUROC for failure detection, three definitions",
+                    "(f-audit) AUROC and AURC for failure detection, three definitions",
                     _subset(
                         audit["auroc"],
                         [
@@ -254,11 +269,17 @@ def _write_summary_markdown(
                             "auroc",
                             "ci_low",
                             "ci_high",
+                            "aurc",
+                            "aurc_ci_low",
+                            "aurc_ci_high",
+                            "aurc_optimal",
                             "n_used",
+                            "n_used_aurc",
                             "n_failures",
                             "n_undefined",
                             "auroc_if_undefined_certain",
                             "auroc_if_undefined_uncertain",
+                            "aurc_if_missed_is_worst",
                         ],
                     ),
                     "`label_source=own` scores each predictor against the failures of "
@@ -269,8 +290,50 @@ def _write_summary_markdown(
                     "missed; `non_missed_failures` excludes missed detections (every "
                     "predictor is defined there); `missed_vs_clean` contrasts missed "
                     "detections with clean cases only. `n_used`/`n_undefined` make the NaN "
-                    "drop visible and the two bound columns score undefined cases as "
-                    "maximally certain/uncertain. CIs resample videos (29 clusters).",
+                    "drop visible and the two AUROC bounds score undefined cases as "
+                    "maximally certain/uncertain. **AURC** is the area under the "
+                    "risk-coverage curve with risk = 1 - Dice (lower = better); "
+                    "`aurc_optimal` is the same cohort sorted by its own risk (the oracle "
+                    "lower bound) and `aurc_if_missed_is_worst` repeats the point estimate "
+                    "with missed detections counted as risk 1 instead of being dropped. "
+                    "CIs resample videos (29 clusters).",
+                ),
+                (
+                    "(f-audit) Agreement detectors: pairwise Dice between views/seeds",
+                    _subset(
+                        audit["auroc"].loc[
+                            audit["auroc"]["predictor"].isin(
+                                [
+                                    "tta4_view_dice_disagreement",
+                                    "ensemble3_dice_disagreement",
+                                    "ensemble3_tta4_dice_disagreement",
+                                    "tta4_entropy_roi",
+                                ]
+                            )
+                        ],
+                        [
+                            "predictor",
+                            "label_source",
+                            "label_prediction",
+                            "failure_definition",
+                            "auroc",
+                            "ci_low",
+                            "ci_high",
+                            "aurc",
+                            "aurc_ci_low",
+                            "aurc_ci_high",
+                            "aurc_optimal",
+                            "n_used",
+                            "n_used_aurc",
+                            "n_failures",
+                        ],
+                    ),
+                    "`tta4_view_dice_disagreement` = 1 - mean pairwise Dice between the "
+                    "four tta4 views (per seed, averaged over seeds); "
+                    "`ensemble3_dice_disagreement` and `ensemble3_tta4_dice_disagreement` "
+                    "are the same over the three seeds' baseline / tta4 maps. Higher = the "
+                    "members disagree = more uncertain. The tta4 entropy row is kept as the "
+                    "reference descriptor.",
                 ),
                 (
                     "(f-audit) Spearman against HD95 and 1 - Dice (all predictors)",
@@ -292,23 +355,34 @@ def _write_summary_markdown(
                     "so ROI descriptors lose the missed detections here.",
                 ),
                 (
-                    "(f-audit) tta4 entropy(ROI) vs each alternative (paired bootstrap)",
+                    "(f-audit) detector vs detector on AUROC and AURC (paired bootstrap)",
                     _subset(
                         audit["tests"],
                         [
+                            "predictor",
                             "compared_with",
                             "label_prediction",
                             "delta_auroc",
                             "ci_low",
                             "ci_high",
                             "p_value",
+                            "delta_aurc",
+                            "aurc_ci_low",
+                            "aurc_ci_high",
+                            "aurc_p_value",
                             "n_used",
                         ],
                     ),
-                    "Definition `non_missed_failures`, paired video-cluster bootstrap of the "
-                    "AUROC difference (positive = tta4 entropy in the ROI is better), "
-                    "computed twice: under the tta4 labels and under the alternative's own "
-                    "labels (`label_prediction`).",
+                    "Definition `non_missed_failures`, one shared video-cluster resampling for "
+                    "both statistics. `delta_auroc` is positive when the first predictor is "
+                    "the better classifier; `delta_aurc = AURC(first) - AURC(second)` is a "
+                    "difference of selective risks, so it is **negative** when the first "
+                    "predictor is the better detector. The `tta4_entropy_roi` rows compare "
+                    "the reference descriptor with every alternative (under the tta4 labels "
+                    "and under the alternative's own labels); the "
+                    "`tta4_view_dice_disagreement` rows are the required comparisons of the "
+                    "view-pairwise-Dice detector against the single-view ROI entropy and "
+                    "against 1 - confidence.",
                 ),
             ]
         )
@@ -500,11 +574,26 @@ def main(argv: list[str] | None = None) -> int:
     extra_paths = write_tables(extra_tables, output_dir)
 
     # ---- uncertainty audit: ROI semantics, three failure definitions, baselines ----
+    view_agreement = None
+    if not args.no_view_agreement:
+        agreement_path = (
+            Path(args.view_agreement_dir)
+            if args.view_agreement_dir
+            else _REPO_ROOT / view_agreement_dir(config)
+        )
+        if agreement_path.exists():
+            view_agreement = load_view_agreement([agreement_path])
+            print(
+                f"view agreement: {len(view_agreement)} case(s) from {agreement_path}"
+            )
+        else:
+            print(f"view agreement: no CSVs at {agreement_path} (detector stays NaN)")
     audit = run_uncertainty_audit(
         runs,
         averaged,
         by_seed=by_seed,
         ensemble_frame=tables.get("ensemble_per_case"),
+        view_agreement=view_agreement,
         n_bootstrap=min(1000, n_bootstrap),
         ci=ci,
         seed=bootstrap_seed,
@@ -522,7 +611,7 @@ def main(argv: list[str] | None = None) -> int:
     for note in audit["notes"]:
         print(f"audit: {note}")
     _print_table(
-        "uncertainty audit: AUROC for failure detection (all / non-missed / missed-only)",
+        "uncertainty audit: AUROC / AURC for failure detection (all / non-missed / missed-only)",
         audit["auroc"].loc[
             audit["auroc"]["predictor"].isin(
                 [
@@ -532,6 +621,9 @@ def main(argv: list[str] | None = None) -> int:
                     "baseline_entropy_roi",
                     "ensemble3_entropy_roi",
                     "ensemble3_variance_roi",
+                    "tta4_view_dice_disagreement",
+                    "ensemble3_dice_disagreement",
+                    "ensemble3_tta4_dice_disagreement",
                 ]
             )
         ],
@@ -543,25 +635,39 @@ def main(argv: list[str] | None = None) -> int:
             "auroc",
             "ci_low",
             "ci_high",
+            "aurc",
+            "aurc_ci_low",
+            "aurc_ci_high",
+            "aurc_optimal",
             "n_used",
+            "n_used_aurc",
             "n_failures",
             "n_undefined",
         ],
-        max_rows=30,
+        max_rows=40,
     )
     _print_table(
-        "uncertainty audit: tta4 entropy(ROI) vs each alternative (paired bootstrap)",
-        audit["tests"],
+        "uncertainty audit: detector vs detector (paired bootstrap, AUROC and AURC)",
+        audit["tests"].loc[
+            audit["tests"]["predictor"].isin(
+                ["tta4_entropy_roi", "tta4_view_dice_disagreement"]
+            )
+        ],
         columns=[
+            "predictor",
             "compared_with",
             "label_prediction",
             "delta_auroc",
             "ci_low",
             "ci_high",
             "p_value",
+            "delta_aurc",
+            "aurc_ci_low",
+            "aurc_ci_high",
+            "aurc_p_value",
             "n_used",
         ],
-        max_rows=30,
+        max_rows=40,
     )
     _print_table(
         "uncertainty audit: ROI diagnostics",

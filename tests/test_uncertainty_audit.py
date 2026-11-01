@@ -7,13 +7,19 @@ import pandas as pd
 import pytest
 
 from melba.eval.uncertainty_audit import (
+    aurc,
+    aurc_ci,
+    aurc_optimal,
     auroc_ci,
     auroc_difference,
     auroc_nan_bounds,
     build_case_table,
+    detector_difference,
+    load_view_agreement,
     map_statistics,
     roi_diagnostics,
     run_uncertainty_audit,
+    selective_risk_curve,
 )
 
 
@@ -90,6 +96,90 @@ def test_auroc_difference_detects_a_better_predictor() -> None:
     assert np.isfinite(result["ci_high"])
     assert result["ci_low"] <= result["ci_high"]
     identical = auroc_difference(strong, strong, labels, groups, n_bootstrap=50)
+def test_mean_pairwise_dice_matches_the_pair_formula() -> None:
+    from melba.metrics.uncertainty import mean_pairwise_dice
+
+    first = np.zeros((8, 8), dtype=np.float32)
+    first[0:4, 0:4] = 0.9
+    second = np.zeros((8, 8), dtype=np.float32)
+    second[2:6, 0:4] = 0.9
+    stack = np.stack([first, second, second], axis=0)[:, None]
+    # pairs: (0,1) and (0,2) give 2*8/(16+16) = 0.5, (1,2) gives 1.0
+    expected = (0.5 + 0.5 + 1.0) / 3
+    assert mean_pairwise_dice(stack) == pytest.approx(expected)
+    identical = np.stack([first, first, first, first], axis=0)[:, None]
+    assert mean_pairwise_dice(identical) == pytest.approx(1.0)
+    assert mean_pairwise_dice(first[None, None]) == pytest.approx(1.0)
+
+
+def test_aurc_of_a_perfect_ranking_equals_the_optimal_ranking() -> None:
+    risks = np.array([0.1, 0.2, 0.3, 0.4])
+    scores = risks.copy()
+    perfect = aurc(scores, risks)
+    assert perfect == pytest.approx(0.175)  # mean of (0.1, 0.15, 0.2, 0.25)
+    assert perfect == pytest.approx(aurc_optimal(risks))
+    reversed_auc = aurc(scores[::-1], risks)
+    assert reversed_auc == pytest.approx(0.325)
+    assert reversed_auc > perfect
+    # a useless (all-tied) detector sits exactly at the cohort risk
+    assert aurc(np.zeros(4), risks) == pytest.approx(risks.mean())
+
+
+def test_aurc_averages_within_tie_blocks() -> None:
+    risks = np.array([0.0, 0.4, 0.6, 1.0])
+    tied = np.array([0.0, 0.0, 1.0, 1.0])
+    # hand computed: 0.2, 0.2, 0.4, 0.5 -> mean 0.325
+    assert aurc(tied, risks) == pytest.approx(0.325)
+    # the order inside a tie block must not matter
+    shuffled = aurc(tied[[1, 0, 3, 2]], risks[[1, 0, 3, 2]])
+    assert shuffled == pytest.approx(0.325)
+    # fewer than three usable cases is undefined, not silently zero
+    assert np.isnan(aurc([0.1, 0.2], [0.1, 0.2]))
+
+
+def test_selective_risk_curve_ends_at_the_cohort_risk() -> None:
+    risks = np.array([0.1, 0.2, 0.5, 1.0])
+    coverage, values = selective_risk_curve(risks, risks)
+    assert coverage[0] == pytest.approx(0.25)
+    assert coverage[-1] == pytest.approx(1.0)
+    assert values[0] == pytest.approx(0.1)
+    assert values[-1] == pytest.approx(risks.mean())
+    # a NaN risk drops the case instead of poisoning the curve
+    coverage_with_nan, values_with_nan = selective_risk_curve(
+        np.append(risks, 0.3), np.append(risks, np.nan)
+    )
+    assert coverage_with_nan[-1] == pytest.approx(1.0)
+    assert np.isfinite(values_with_nan).all()
+
+
+def test_aurc_ci_brackets_the_point_estimate() -> None:
+    rng = np.random.default_rng(0)
+    scores = rng.random(30)
+    risks = np.round(np.clip(scores + rng.normal(scale=0.2, size=30), 0.0, 1.0), 2)
+    groups = np.repeat([f"v{index}" for index in range(10)], 3)
+    result = aurc_ci(scores, risks, groups, n_bootstrap=200)
+    assert result["aurc_ci_low"] <= result["aurc"] <= result["aurc_ci_high"]
+    assert result["aurc_optimal"] <= result["aurc"] + 1e-12
+    assert result["aurc_excess"] == pytest.approx(result["aurc"] - result["aurc_optimal"])
+    assert result["n_used_aurc"] == 30
+
+
+def test_detector_difference_reports_auroc_and_aurc() -> None:
+    labels = [False, False, False, False, True, True, True, True]
+    strong = [0.1, 0.2, 0.15, 0.25, 0.8, 0.9, 0.85, 0.95]
+    weak = [0.4, 0.5, 0.3, 0.45, 0.5, 0.55, 0.4, 0.6]
+    risks = [0.05, 0.1, 0.08, 0.2, 0.7, 0.9, 0.6, 0.8]
+    groups = ["v0", "v0", "v1", "v1", "v2", "v2", "v3", "v3"]
+    result = detector_difference(strong, weak, labels, risks, groups, n_bootstrap=200)
+    assert result["delta_auroc"] > 0.1
+    assert result["delta_aurc"] < 0.0  # the better ranked detector has the lower risk
+    assert result["aurc_ci_low"] <= result["delta_aurc"] <= result["aurc_ci_high"]
+    assert 0.0 <= result["aurc_p_value"] <= 1.0
+    assert {"ci_low", "ci_high", "p_value", "n_used"} <= set(result)
+    identical = detector_difference(strong, strong, labels, risks, groups, n_bootstrap=50)
+    assert identical["delta_aurc"] == pytest.approx(0.0)
+    assert identical["delta_auroc"] == pytest.approx(0.0)
+
     assert identical["delta_auroc"] == pytest.approx(0.0)
     assert identical["p_value"] == pytest.approx(1.0)
 
@@ -202,4 +292,159 @@ def test_run_uncertainty_audit_reports_the_nan_gap_explicitly(tmp_path) -> None:
     )
     assert any("failures per prediction" in note for note in audit["notes"])
     assert any("no ROI value" in note for note in audit["notes"])
+
+
+def _seed_map_fixture(tmp_path, *, n_seeds: int = 3):
+    """Three seeds whose baseline/tta4 maps differ slightly, for the Dice detectors."""
+    from types import SimpleNamespace
+
+    runs = []
+    for seed in range(n_seeds):
+        map_dir = tmp_path / f"maps/fold0_seed{seed}"
+        map_dir.mkdir(parents=True)
+        for offset, case_id in enumerate(("c1", "c2")):
+            # the seed's maps shift by one pixel, so the pairwise Dice is < 1
+            tta4 = np.zeros((16, 16), dtype=np.float32)
+            tta4[4 : 10 + offset, 4:10] = 0.9
+            tta4[3 + seed, 4:12] = np.maximum(tta4[3 + seed, 4:12], 0.7)
+            baseline = np.zeros((16, 16), dtype=np.float32)
+            baseline[5 : 11, 4 + seed : 10 + seed] = 0.9
+            np.save(map_dir / f"{case_id}__tta4__mean.npy", tta4.astype(np.float16))
+            np.save(map_dir / f"{case_id}__baseline__mean.npy", baseline.astype(np.float16))
+        runs.append(SimpleNamespace(fold=0, seed=seed, map_dir=map_dir))
+
+    rows = []
+    for index, case_id in enumerate(("c1", "c2")):
+        for method, dice in (("tta4", 0.8 - 0.1 * index), ("baseline", 0.75)):
+            for metric, value in (
+                ("dice", dice),
+                ("hd95", 20.0),
+                ("entropy_mean", 0.2),
+                ("entropy_mean_roi", 0.1),
+                ("variance_mean", 0.01),
+                ("variance_mean_roi", 0.02),
+                ("view_disagreement", 0.05),
+            ):
+                rows.append(
+                    {
+                        "case_id": case_id,
+                        "group_id": f"v{index}",
+                        "fold": 0,
+                        "method": method,
+                        "metric": metric,
+                        "value": value,
+                        "missed_detection": 0,
+                    }
+                )
+    return runs, pd.DataFrame(rows)
+
+
+def test_build_case_table_computes_seed_pairwise_dice(tmp_path) -> None:
+    runs, averaged = _seed_map_fixture(tmp_path)
+    table = build_case_table(runs, averaged).set_index("case_id")
+
+    for case_id in table.index:
+        baseline = table.loc[case_id, "ensemble3_pairwise_dice"]
+        tta4 = table.loc[case_id, "ensemble3_tta4_pairwise_dice"]
+        assert 0.0 < baseline < 1.0
+        assert 0.0 < tta4 < 1.0
+        assert table.loc[case_id, "ensemble3_dice_disagreement"] == pytest.approx(
+            1.0 - baseline
+        )
+    # no view-agreement CSV was passed, so the view-level detector stays NaN
+    assert table["tta4_view_pairwise_dice"].isna().all()
+    assert table["tta4_view_dice_disagreement"].isna().all()
+
+    agreement = pd.DataFrame(
+        {
+            "case_id": ["c1", "c2"],
+            "tta4_view_pairwise_dice": [0.9, 0.5],
+            "n_seeds": [3, 3],
+        }
+    )
+    with_views = build_case_table(runs, averaged, view_agreement=agreement).set_index(
+        "case_id"
+    )
+    assert with_views.loc["c1", "tta4_view_pairwise_dice"] == pytest.approx(0.9)
+    assert with_views.loc["c2", "tta4_view_dice_disagreement"] == pytest.approx(0.5)
+
+
+def test_load_view_agreement_averages_seeds_and_expands_directories(tmp_path) -> None:
+    rows = []
+    for seed, value in ((0, 0.9), (1, 0.7)):
+        for case_id in ("1", "2"):
+            rows.append(
+                {
+                    "case_id": case_id,
+                    "seed": seed,
+                    "fold": 0,
+                    "method": "tta4",
+                    "metric": "view_pairwise_dice",
+                    "value": value,
+                }
+            )
+    rows.append(
+        {
+            "case_id": "2",
+            "seed": 2,
+            "fold": 0,
+            "method": "tta4",
+            "metric": "view_pairwise_dice",
+            "value": 0.5,
+        }
+    )
+    rows.append(
+        {
+            "case_id": "1",
+            "seed": 0,
+            "fold": 0,
+            "method": "tta4",
+            "metric": "dice",
+            "value": 0.99,
+        }
+    )
+    folder = tmp_path / "agreement"
+    folder.mkdir()
+    pd.DataFrame(rows[:4]).to_csv(folder / "a_per_case.csv", index=False)
+    pd.DataFrame(rows[4:]).to_csv(folder / "b_per_case.csv", index=False)
+
+    table = load_view_agreement([folder]).set_index("case_id")
+    assert table.loc["1", "tta4_view_pairwise_dice"] == pytest.approx(0.8)
+    assert table.loc["1", "n_seeds"] == 2
+    assert table.loc["2", "tta4_view_pairwise_dice"] == pytest.approx(0.7)  # (0.9+0.7+0.5)/3
+    assert table.loc["2", "n_seeds"] == 3
+    # the ground-truth `dice` rows of the re-run are ignored
+    assert "dice" not in table.columns
+    assert load_view_agreement([tmp_path / "missing"]).empty
+
+
+def test_run_uncertainty_audit_reports_aurc_next_to_auroc(tmp_path) -> None:
+    runs, averaged = _audit_fixture(tmp_path)
+    audit = run_uncertainty_audit(runs, averaged, n_bootstrap=100, seed=0)
+    auroc = audit["auroc"]
+    for column in (
+        "aurc",
+        "aurc_ci_low",
+        "aurc_ci_high",
+        "aurc_optimal",
+        "aurc_excess",
+        "n_used_aurc",
+        "n_undefined_aurc",
+        "aurc_if_missed_is_worst",
+    ):
+        assert column in auroc.columns
+    finite = auroc.loc[np.isfinite(auroc["aurc"])]
+    assert not finite.empty
+    assert (finite["aurc"] >= finite["aurc_optimal"] - 1e-12).all()
+    # the missed case has no Dice, so the AURC drops it and says so
+    all_failures = auroc.loc[
+        (auroc["predictor"] == "tta4_entropy_roi")
+        & (auroc["failure_definition"] == "all_failures")
+    ].iloc[0]
+    assert all_failures["n_undefined_aurc"] == 1
+    assert np.isfinite(all_failures["aurc_if_missed_is_worst"])
+    # the view-agreement detector needs the extra CSV: NaN here, with a note
+    assert auroc.loc[auroc["predictor"] == "tta4_view_dice_disagreement", "aurc"].isna().all()
+    assert any("view pairwise Dice unavailable" in note for note in audit["notes"])
+    assert {"delta_aurc", "aurc_ci_low", "aurc_p_value"} <= set(audit["tests"].columns)
 

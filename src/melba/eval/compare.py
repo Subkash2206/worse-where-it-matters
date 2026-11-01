@@ -6,10 +6,19 @@ ResNet-50 UNet and SwinUNETR runs of the same 5x3 protocol):
 * one side-by-side table of the headline methods and metrics;
 * the same paired tests, missed detections and tail/failure rates per model;
 * the **residual-error test**: is the TTA gain larger where the single-view prediction
-  is worse?  For every case ``Spearman(baseline error, delta)`` is computed, once per
-  model and once pooled over both models, with a video-cluster bootstrap CI on rho
-  (frames of a video, and the two models' predictions for the same frame, are not
-  independent).
+  is worse?  Correlating the baseline error with ``treatment - control`` is biased
+  towards a negative rho by regression to the mean, so the primary tests are
+
+  - **Oldham's method**: ``Spearman((control + treatment) / 2, treatment - control)``,
+    which is unbiased when the two methods have equal variance;
+  - a **paired-swap permutation null**: within each case control and treatment are
+    exchanged, video by video, and the statistic is recomputed (the null hypothesis is
+    exchangeability of the two methods);
+
+  and the raw ``Spearman(control, delta)`` is kept as a secondary, explicitly biased
+  column.  Every CI resamples whole videos (frames of a video are not independent);
+* the **between-model gain difference**: per video, is the TTA gain of one model
+  different from the other's (Wilcoxon + paired bootstrap CI on the difference)?
 """
 
 from __future__ import annotations
@@ -19,10 +28,17 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
+from scipy import stats as scipy_stats
 
 from melba.eval.aggregate import seed_averaged_frame, string_ids
 from melba.eval.report import CORE_METRICS, TailThresholds, spearman, tail_table
-from melba.stats import analyze_detection, analyze_long, pool_folds
+from melba.stats import (
+    analyze_detection,
+    analyze_long,
+    bootstrap_ci_mean,
+    metric_direction,
+    pool_folds,
+)
 
 __all__ = [
     "METHODS",
@@ -30,9 +46,11 @@ __all__ = [
     "TABLE_METRICS",
     "cluster_bootstrap_correlation",
     "deltas_table",
+    "gain_difference_table",
     "load_model",
     "method_table",
     "missed_detection_table",
+    "paired_swap_null",
     "residual_error_table",
     "tail_table_for_models",
 ]
@@ -300,6 +318,148 @@ def cluster_bootstrap_correlation(
     return result
 
 
+def _rank_correlation(x: np.ndarray, y: np.ndarray) -> float:
+    """Spearman rho as the Pearson correlation of the (mid-)ranks, NaN-safe and fast."""
+    if x.size < 3:
+        return float("nan")
+    x_ranks = scipy_stats.rankdata(x)
+    y_ranks = scipy_stats.rankdata(y)
+    x_centred = x_ranks - x_ranks.mean()
+    y_centred = y_ranks - y_ranks.mean()
+    denominator = float(np.sqrt((x_centred @ x_centred) * (y_centred @ y_centred)))
+    if denominator == 0.0:
+        return float("nan")
+    return float((x_centred @ y_centred) / denominator)
+
+
+def paired_swap_null(
+    control: Sequence[float],
+    treatment: Sequence[float],
+    groups: Sequence[Any],
+    *,
+    n_permutations: int = 10000,
+    seed: int = 0,
+) -> dict[str, float]:
+    """Permutation null of both residual-error statistics under a **paired swap**.
+
+    For every permutation each *video block* is swapped as a whole (all of its cases
+    exchange control and treatment, so the within-video dependence is preserved),
+    ``delta = treatment - control`` flips sign and both statistics are recomputed:
+
+    * ``naive``: ``Spearman(control, delta)`` (biased by regression to the mean);
+    * ``oldham``: ``Spearman((control + treatment) / 2, delta)``, whose x-axis does not
+      move under the swap and is therefore centred under the null when the two methods
+      are exchangeable.
+
+    The p-value is two-sided and compares ``|rho_perm| >= |rho_observed|``.
+    """
+    control_values = np.asarray(list(control), dtype=float)
+    treatment_values = np.asarray(list(treatment), dtype=float)
+    group_values = np.asarray(list(groups))
+    keep = np.isfinite(control_values) & np.isfinite(treatment_values)
+    control_values = control_values[keep]
+    treatment_values = treatment_values[keep]
+    group_values = group_values[keep]
+    delta = treatment_values - control_values
+    mean_pair = (control_values + treatment_values) / 2.0
+    result: dict[str, float] = {
+        "n_permutations": int(n_permutations),
+        "n_blocks": int(np.unique(group_values).size),
+        "naive_observed": _rank_correlation(control_values, delta),
+        "naive_null_mean": float("nan"),
+        "naive_p_permutation": float("nan"),
+        "oldham_observed": _rank_correlation(mean_pair, delta),
+        "oldham_null_mean": float("nan"),
+        "oldham_p_permutation": float("nan"),
+    }
+    unique, block_index = np.unique(group_values, return_inverse=True)
+    if unique.size < 2 or control_values.size < 3 or int(n_permutations) < 1:
+        return result
+    rng = np.random.default_rng(int(seed))
+    naive_draws = np.empty(int(n_permutations), dtype=float)
+    oldham_draws = np.empty(int(n_permutations), dtype=float)
+    for index in range(int(n_permutations)):
+        flip = (rng.random(unique.size) < 0.5)[block_index]
+        swapped_control = np.where(flip, treatment_values, control_values)
+        swapped_delta = np.where(flip, -delta, delta)
+        naive_draws[index] = _rank_correlation(swapped_control, swapped_delta)
+        oldham_draws[index] = _rank_correlation(mean_pair, swapped_delta)
+    for prefix, draws, observed in (
+        ("naive", naive_draws, result["naive_observed"]),
+        ("oldham", oldham_draws, result["oldham_observed"]),
+    ):
+        finite = draws[np.isfinite(draws)]
+        if finite.size == 0:
+            continue
+        result[f"{prefix}_null_mean"] = float(finite.mean())
+        if np.isfinite(observed):
+            result[f"{prefix}_p_permutation"] = float(
+                np.mean(np.abs(finite) >= abs(observed))
+            )
+    return result
+
+
+def _residual_row(
+    *,
+    scope: str,
+    metric: str,
+    control: pd.Series | np.ndarray,
+    treatment: pd.Series | np.ndarray,
+    groups: pd.Series | np.ndarray,
+    n_bootstrap: int,
+    n_permutations: int,
+    ci: float,
+    seed: int,
+) -> dict[str, Any]:
+    """One row of the residual-error table: naive (secondary), Oldham and both nulls."""
+    control_values = np.asarray(control, dtype=float)
+    treatment_values = np.asarray(treatment, dtype=float)
+    group_values = np.asarray(groups)
+    delta = treatment_values - control_values
+    mean_pair = (control_values + treatment_values) / 2.0
+    keep = np.isfinite(control_values) & np.isfinite(delta)
+    control_values, treatment_values = control_values[keep], treatment_values[keep]
+    delta, mean_pair, group_values = delta[keep], mean_pair[keep], group_values[keep]
+    naive = cluster_bootstrap_correlation(
+        control_values, delta, group_values, n_bootstrap=n_bootstrap, ci=ci, seed=seed
+    )
+    oldham = cluster_bootstrap_correlation(
+        mean_pair, delta, group_values, n_bootstrap=n_bootstrap, ci=ci, seed=seed
+    )
+    permutation = paired_swap_null(
+        control_values,
+        treatment_values,
+        group_values,
+        n_permutations=n_permutations,
+        seed=seed,
+    )
+    return {
+        "scope": scope,
+        "metric": metric,
+        "restriction": "all_cases" if metric == "dice" else "both_nonempty",
+        "n_cases": int(delta.size),
+        "n_clusters": int(naive["n_clusters"]),
+        "delta_mean": float(delta.mean()) if delta.size else float("nan"),
+        # secondary: biased towards a negative rho by regression to the mean
+        "rho_naive": naive["spearman_rho"],
+        "p_naive": naive["spearman_p"],
+        "ci_low_naive": naive["ci_low"],
+        "ci_high_naive": naive["ci_high"],
+        "p_bootstrap_naive": naive["p_bootstrap"],
+        "null_mean_naive": permutation["naive_null_mean"],
+        "p_permutation_naive": permutation["naive_p_permutation"],
+        # primary: Oldham's regression-to-the-mean correction
+        "rho_oldham": oldham["spearman_rho"],
+        "p_oldham": oldham["spearman_p"],
+        "ci_low_oldham": oldham["ci_low"],
+        "ci_high_oldham": oldham["ci_high"],
+        "p_bootstrap_oldham": oldham["p_bootstrap"],
+        "null_mean_oldham": permutation["oldham_null_mean"],
+        "p_permutation_oldham": permutation["oldham_p_permutation"],
+        "n_permutations": permutation["n_permutations"],
+    }
+
+
 def residual_error_table(
     models: Sequence[ModelRuns],
     *,
@@ -307,16 +467,22 @@ def residual_error_table(
     control: str = "baseline",
     metrics: Sequence[str] = ("hd95", "dice"),
     n_bootstrap: int = 2000,
+    n_permutations: int = 10000,
     ci: float = 0.95,
     seed: int = 0,
 ) -> pd.DataFrame:
-    """Residual-error test: does TTA help more where the baseline is worse?
+    """Residual-error test: does TTA help more where the single-view prediction is worse?
 
-    For each case the baseline error and the paired delta (treatment − control) are
-    correlated (Spearman).  A **negative** rho for HD95 means larger TTA improvements on
-    cases the baseline already handled badly; a **positive** rho for Dice means larger
-    improvements where baseline Dice was low.  Rows are per model plus one pooled row
-    over both models (cluster bootstrap by video).
+    ``rho_naive`` correlates the control value with ``treatment - control``; that rho is
+    pulled negative by regression to the mean even when TTA has no effect, so it is
+    reported as a **secondary** column.  The primary tests are ``rho_oldham``
+    (Oldham's mean-vs-change correlation, with the same video-cluster bootstrap CI) and
+    the paired-swap permutation null (``null_mean_*`` / ``p_permutation_*``).
+
+    Sign convention: ``delta`` is always ``treatment - control`` in the metric's own
+    units, so for HD95 *and* Dice a **negative** rho means the gain is larger where the
+    control was worse (HD95 improves downwards, Dice upwards).  Rows are per model plus
+    one pooled row over all models.
     """
     rows: list[dict[str, Any]] = []
     pooled_parts: list[pd.DataFrame] = []
@@ -326,58 +492,154 @@ def residual_error_table(
             wide = _paired_wide(combined, metric=metric, control=control, treatment=treatment)
             if wide.empty:
                 continue
-            delta = wide[treatment] - wide[control]
-            keep = np.isfinite(wide[control]) & np.isfinite(delta)
+            keep = np.isfinite(wide[control]) & np.isfinite(wide[treatment])
             if int(keep.sum()) < 3:
                 continue
-            result = cluster_bootstrap_correlation(
-                wide.loc[keep, control],
-                delta[keep],
-                wide.loc[keep, "group_id"],
-                n_bootstrap=n_bootstrap,
-                ci=ci,
-                seed=seed,
-            )
+            subset = wide.loc[keep]
             rows.append(
-                {
-                    "scope": f"model:{model.name}",
-                    "metric": metric,
-                    "restriction": "both_nonempty" if metric != "dice" else "all_cases",
-                    "delta_mean": float(delta[keep].mean()),
-                    **result,
-                }
+                _residual_row(
+                    scope=f"model:{model.name}",
+                    metric=metric,
+                    control=subset[control],
+                    treatment=subset[treatment],
+                    groups=subset["group_id"],
+                    n_bootstrap=n_bootstrap,
+                    n_permutations=n_permutations,
+                    ci=ci,
+                    seed=seed,
+                )
             )
             pooled_parts.append(
                 pd.DataFrame(
                     {
                         "metric": metric,
-                        "baseline_value": wide.loc[keep, control].to_numpy(),
-                        "delta": delta[keep].to_numpy(),
-                        "group_id": wide.loc[keep, "group_id"].to_numpy(),
+                        "control": subset[control].to_numpy(),
+                        "treatment": subset[treatment].to_numpy(),
+                        "group_id": subset["group_id"].to_numpy(),
                     }
                 )
             )
-    if pooled_parts:
+    if pooled_parts and len(models) > 1:
         pooled = pd.concat(pooled_parts, ignore_index=True)
         for metric in metrics:
             subset = pooled.loc[pooled["metric"] == metric]
             if len(subset) < 3:
                 continue
-            result = cluster_bootstrap_correlation(
-                subset["baseline_value"],
-                subset["delta"],
-                subset["group_id"],
-                n_bootstrap=n_bootstrap,
-                ci=ci,
-                seed=seed,
+            rows.append(
+                _residual_row(
+                    scope="pooled_models",
+                    metric=metric,
+                    control=subset["control"],
+                    treatment=subset["treatment"],
+                    groups=subset["group_id"],
+                    n_bootstrap=n_bootstrap,
+                    n_permutations=n_permutations,
+                    ci=ci,
+                    seed=seed,
+                )
+            )
+    return pd.DataFrame(rows)
+
+
+def gain_difference_table(
+    models: Sequence[ModelRuns],
+    *,
+    treatment: str = "tta4",
+    control: str = "baseline",
+    metrics: Sequence[str] = ("dice", "hd95"),
+    unit: str = "group_id",
+    n_bootstrap: int = 2000,
+    ci: float = 0.95,
+    seed: int = 0,
+) -> pd.DataFrame:
+    """Between-model test: is the video-level TTA gain of one model larger than another's?
+
+    The gain is ``treatment - control`` in the metric's own units, averaged per video
+    inside each model; the two models are then paired **by video** and the difference of
+    gains is tested with a Wilcoxon signed-rank test and a paired bootstrap CI of the
+    mean difference (videos resampled as blocks).  The first model is the reference, so
+    with the UNet and SwinUNETR configs the table answers "is the SwinUNETR TTA gain
+    larger than the UNet's?".
+
+    ``delta_gain`` is ``compared - reference``; ``favours`` names the model with the
+    larger *gain* (not the better score: a negative HD95 gain can still be an
+    improvement), and ``better_model`` names the model with the better mean score.
+    """
+    if len(models) < 2:
+        return pd.DataFrame()
+    reference = models[0]
+    rows: list[dict[str, Any]] = []
+    for model in models[1:]:
+        for metric in metrics:
+            gains: dict[str, pd.Series] = {}
+            scores: dict[str, pd.Series] = {}
+            for candidate in (reference, model):
+                wide = _paired_wide(
+                    candidate.pooled(), metric=metric, control=control, treatment=treatment
+                )
+                if wide.empty:
+                    gains, scores = {}, {}
+                    break
+                wide = wide.assign(
+                    gain=wide[treatment] - wide[control],
+                    treatment_value=wide[treatment],
+                )
+                gains[candidate.name] = wide.groupby(unit)["gain"].mean()
+                scores[candidate.name] = wide.groupby(unit)["treatment_value"].mean()
+            if not gains:
+                continue
+            paired = pd.concat(gains, axis=1, join="inner").dropna()
+            paired_scores = pd.concat(scores, axis=1, join="inner").dropna()
+            if len(paired) < 3:
+                continue
+            difference = (paired[model.name] - paired[reference.name]).to_numpy(dtype=float)
+            mean_difference = float(np.mean(difference))
+            low, high = bootstrap_ci_mean(
+                difference, n_bootstrap=n_bootstrap, ci=ci, seed=seed
+            )
+            if np.all(difference == 0.0):
+                p_value = 1.0
+            else:
+                p_value = float(
+                    scipy_stats.wilcoxon(
+                        difference, zero_method="wilcox", alternative="two-sided"
+                    ).pvalue
+                )
+            direction = metric_direction(metric)
+            gain_reference = float(paired[reference.name].mean())
+            gain_compared = float(paired[model.name].mean())
+            if abs(mean_difference) < 1e-12:
+                favours = "tie"
+            elif (mean_difference > 0) == (direction == "higher"):
+                favours = model.name
+            else:
+                favours = reference.name
+            score_reference = float(paired_scores[reference.name].mean())
+            score_compared = float(paired_scores[model.name].mean())
+            better_model = (
+                model.name
+                if (score_compared > score_reference) == (direction == "higher")
+                else reference.name
             )
             rows.append(
                 {
-                    "scope": "pooled_models",
                     "metric": metric,
-                    "restriction": "both_nonempty" if metric != "dice" else "all_cases",
-                    "delta_mean": float(subset["delta"].mean()),
-                    **result,
+                    "reference": reference.name,
+                    "compared": model.name,
+                    "treatment": treatment,
+                    "control": control,
+                    "metric_direction": direction,
+                    "n_units": int(len(paired)),
+                    "gain_reference": gain_reference,
+                    "gain_compared": gain_compared,
+                    "delta_gain": mean_difference,
+                    "ci_low": float(low),
+                    "ci_high": float(high),
+                    "p_value": p_value,
+                    "favours": favours,
+                    "score_reference": score_reference,
+                    "score_compared": score_compared,
+                    "better_model": better_model,
                 }
             )
     return pd.DataFrame(rows)

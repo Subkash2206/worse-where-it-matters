@@ -1,0 +1,36 @@
+# -----------------------------------------------------------------------------
+# Re-derive the tta4 *view agreement* for an already-finished grid (CPU only).
+#
+# The per-case CSVs written by the grid record the aggregated map, not the four
+# individual view predictions, so `view_pairwise_dice` (mean Dice between every
+# pair of binarised tta4 views) cannot be recovered from the saved results.  This
+# config re-runs the tta4 inference only, on CPU, into its own output directory,
+# and writes the view-agreement descriptor for every case/seed:
+#
+#     python scripts/evaluate.py --config configs/cvc_clinicdb/unet_resnet50_view_agreement.yaml \
+#         --fold 0 --set seed=0
+#
+# scripts/aggregate.py picks the CSVs up automatically (see
+# `uncertainty_audit.view_agreement_dir`) and reports the pairwise-Dice detectors;
+# the ground-truth columns of these runs are duplicates and are not used.
+# -----------------------------------------------------------------------------
+defaults:
+  - unet_resnet50.yaml
+
+device: cpu
+
+tta:
+  methods:
+    - name: tta4                            # 4 views: Klein four-subgroup
+      views:
+        - { name: identity, ops: [] }
+        - { name: rot180, ops: [{ type: rot90, k: 2, axes: [h, w] }] }
+        - { name: hflip, ops: [{ type: flip, axes: [w] }] }
+        - { name: vflip, ops: [{ type: flip, axes: [h] }] }
+
+evaluation:
+  output_dir: results/cvc_clinicdb_unet_resnet50/view_agreement/evaluation
+  save_probability_maps: false            # only the metric is needed, not the float16 maps
+  probability_map_methods: [tta4]
+  timing: false
+  write_summary: false
