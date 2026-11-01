@@ -11,7 +11,9 @@ Produces under ``results/compare_models/``:
   bootstrap CI and a paired-swap permutation null; secondary = the regression-to-the-mean
   biased ``Spearman(control, delta)``; per model and pooled over both;
 * ``gain_difference.csv`` — between-model test of the video-level TTA gain (Wilcoxon +
-  paired bootstrap CI on ``gain_compared - gain_reference``); requires two configs;
+  paired bootstrap CI on ``gain_compared - gain_reference``), on an ``absolute`` scale and
+  on a ``relative`` one (log ratio for distances, fraction of the remaining error for
+  Dice), marked by the ``scale`` column; requires two configs;
 * ``comparison.md`` — all of the above rendered as markdown.
 
 A single ``--configs`` entry is allowed: the per-model residual-error rows are still
@@ -206,10 +208,14 @@ def main(argv: list[str] | None = None) -> int:
     _print(
         tables["gain_difference"],
         columns=[
-            "metric", "reference", "compared", "n_units", "gain_reference", "gain_compared",
-            "delta_gain", "ci_low", "ci_high", "p_value", "favours", "better_model",
+            "metric", "scale", "relative_definition", "reference", "compared", "n_units",
+            "gain_reference", "gain_compared", "delta_gain", "ci_low", "ci_high",
+            "p_value", "favours", "better_model",
         ],
-        title="(6) between-model TTA gain difference (paired by video), needs 2 models",
+        title=(
+            "(6) between-model TTA gain difference (paired by video); scale=absolute / "
+            "relative (log ratio for distances, fraction of the remaining error for Dice)"
+        ),
     )
 
     paths = write_tables(
@@ -272,7 +278,13 @@ def main(argv: list[str] | None = None) -> int:
             "paired by video and `delta_gain = compared - reference` is tested with a "
             "Wilcoxon signed-rank test and a paired video bootstrap CI. `favours` names "
             "the model with the larger gain, `better_model` the model with the better "
-            "mean score (the two differ when both gains are negative). Needs two configs.",
+            "mean score (the two differ when both gains are negative). Every metric "
+            "appears twice: `scale=absolute` (metric units, dominated by whichever model "
+            "works on the larger scale) and `scale=relative` — `relative_definition="
+            "log_ratio` is `log(treatment / control)` for distances, so a 10 % reduction "
+            "counts the same at 90 px and at 40 px, and `relative_definition="
+            "remaining_error` is `(treatment - control) / (1 - control)` for Dice, the "
+            "fraction of the error the treatment recovers. Needs two configs.",
         ),
     ]
     summary = write_markdown(

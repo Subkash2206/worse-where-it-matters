@@ -283,8 +283,16 @@ folds) and writes to `results/compare_models/`:
   averaged per video inside each model, paired by video, tested with a Wilcoxon
   signed-rank test and a paired video bootstrap CI of `delta_gain = compared −
   reference` (`favours` names the model with the larger gain, `better_model` the model
-  with the better score). Needs two `--configs`; with one config the per-model
-  residual-error rows are still produced;
+  with the better score). Every metric appears on **two scales**, marked by the `scale`
+  column and described in `relative_definition`:
+  `scale=absolute` is the raw difference in metric units (dominated by whichever model
+  works on the larger scale — SwinUNETR's HD95 is ~90 px against the UNet's ~40 px),
+  while `scale=relative` is scale-free: `log_ratio` = `log(tta4 / baseline)` for distances
+  (HD95, ASSD, …), so a 10 % reduction counts the same at 90 px and at 40 px, and
+  `remaining_error` = `(tta4 − baseline) / (1 − baseline)` for Dice, the fraction of the
+  error the treatment recovers. The relative rows need both values positive (distances)
+  or `baseline < 1` (Dice), so their `n_units` can be one smaller. Needs two
+  `--configs`; with one config the per-model residual-error rows are still produced;
 * `comparison.md` — all of the above as one markdown report.
 
 ## Data-fraction sweep (configs only)

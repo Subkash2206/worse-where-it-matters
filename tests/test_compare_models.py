@@ -236,9 +236,12 @@ def test_gain_difference_table_pairs_models_by_video() -> None:
         _latent_model("unet", effect=0.5),
         _latent_model("swin", effect=0.0),
     ]
-    table = gain_difference_table(models, n_bootstrap=200).set_index("metric")
-    assert set(table.index) == {"dice", "hd95"}
-    dice = table.loc["dice"]
+    table = gain_difference_table(models, n_bootstrap=200)
+    assert set(table["metric"]) == {"dice", "hd95"}  # no rows for the absent `assd`
+    assert set(table["scale"]) == {"absolute", "relative"}
+    indexed = table.set_index(["metric", "scale"])
+
+    dice = indexed.loc[("dice", "absolute")]
     assert dice["reference"] == "unet" and dice["compared"] == "swin"
     assert dice["n_units"] == 24  # videos, not frames
     # the treating model has the larger (positive) Dice gain
@@ -247,13 +250,173 @@ def test_gain_difference_table_pairs_models_by_video() -> None:
     assert dice["p_value"] < 0.05
     assert dice["ci_low"] <= dice["delta_gain"] <= dice["ci_high"]
     # a "gain" is treatment - control, so it is negative for HD95 in both models
-    assert table.loc["hd95", "gain_reference"] < 0.0
-    assert table.loc["hd95", "delta_gain"] > 0.0  # the treated model improves more
+    hd95 = indexed.loc[("hd95", "absolute")]
+    assert hd95["gain_reference"] < 0.0
+    assert hd95["delta_gain"] > 0.0  # the treated model improves more
 
     identical = gain_difference_table([models[0], models[0]], n_bootstrap=100)
     assert np.allclose(identical["delta_gain"], 0.0)
     assert set(identical["favours"]) == {"tie"}
     assert gain_difference_table(models[:1]).empty
+
+
+def _scaled_frames(
+    *,
+    seed: int = 0,
+    control_hd95: float,
+    treatment_ratio: float,
+    control_dice: float,
+    recovered_fraction: float,
+    n_videos: int = 24,
+    n_frames: int = 4,
+) -> pd.DataFrame:
+    """Frames where every video gets the *same relative* gain, on a chosen scale.
+
+    ``treatment_ratio`` is HD95's ``tta4 / baseline`` (0.9 = a 10 % reduction) and
+    ``recovered_fraction`` is Dice's ``(tta4 - baseline) / (1 - baseline)``, so two such
+    models have identical relative gains but absolute gains that differ by their scale.
+    """
+    rng = np.random.default_rng(404 + seed)
+    videos_per_fold = n_videos // N_FOLDS
+    rows = []
+    for fold in range(N_FOLDS):
+        for video in range(videos_per_fold):
+            group = f"s{fold}_{video}"
+            # a video-specific difficulty keeps the numbers realistic while the
+            # *relative* gain stays identical
+            difficulty = float(rng.uniform(0.8, 1.25))
+            baseline_hd95 = control_hd95 * difficulty
+            baseline_dice = 1.0 - (1.0 - control_dice) * difficulty
+            for frame in range(n_frames):
+                case = f"m{fold}_{video}_{frame}"
+                for method in ("baseline", "tta4"):
+                    is_treatment = method == "tta4"
+                    values = {
+                        "hd95": (
+                            baseline_hd95 * treatment_ratio
+                            if is_treatment
+                            else baseline_hd95
+                        ),
+                        "assd": (
+                            baseline_hd95 * 0.4 * treatment_ratio
+                            if is_treatment
+                            else baseline_hd95 * 0.4
+                        ),
+                        "dice": (
+                            baseline_dice + recovered_fraction * (1.0 - baseline_dice)
+                            if is_treatment
+                            else baseline_dice
+                        ),
+                    }
+                    for metric, value in values.items():
+                        rows.append(
+                            {
+                                "run_id": f"run-{seed}",
+                                "seed": seed,
+                                "fold": fold,
+                                "split": "test",
+                                "case_id": case,
+                                "group_id": group,
+                                "method": method,
+                                "metric": metric,
+                                "value": float(value),
+                                "empty_flag": "both_nonempty",
+                                "missed_detection": 0,
+                            }
+                        )
+    return pd.DataFrame(rows)
+
+
+def _scaled_model(name: str, **kwargs) -> ModelRuns:
+    frame = _scaled_frames(**kwargs)
+    return ModelRuns(name=name, frames_by_seed={int(kwargs.get("seed", 0)): [frame]})
+
+
+def test_relative_gain_rows_are_scale_free() -> None:
+    """A 10 % HD95 reduction and a 20 % error recovery count the same at any scale."""
+    models = [
+        # identical relative gains, very different absolute scales
+        _scaled_model(
+            "sharp",
+            control_hd95=40.0,
+            treatment_ratio=0.9,
+            control_dice=0.8,
+            recovered_fraction=0.2,
+        ),
+        _scaled_model(
+            "blurry",
+            control_hd95=90.0,
+            treatment_ratio=0.9,
+            control_dice=0.5,
+            recovered_fraction=0.2,
+        ),
+    ]
+    table = gain_difference_table(models, n_bootstrap=100)
+    assert set(table["metric"]) == {"dice", "hd95", "assd"}
+    assert set(table["scale"]) == {"absolute", "relative"}
+    assert set(table["relative_definition"]) - {""} == {"log_ratio", "remaining_error"}
+
+    indexed = table.set_index(["metric", "scale", "relative_definition"])
+    # absolute: the blurry model's HD95 gain is much larger purely because of its scale
+    absolute_hd95 = indexed.loc[("hd95", "absolute", "")]
+    assert abs(absolute_hd95["gain_compared"]) > 1.5 * abs(absolute_hd95["gain_reference"])
+    assert abs(absolute_hd95["delta_gain"]) > 4.0  # ~0.1 x (90 - 40) px per video
+    # relative: identical log ratios, so the between-model difference vanishes
+    relative_hd95 = indexed.loc[("hd95", "relative", "log_ratio")]
+    assert relative_hd95["gain_reference"] == pytest.approx(np.log(0.9), abs=1e-3)
+    assert relative_hd95["gain_compared"] == pytest.approx(np.log(0.9), abs=1e-3)
+    assert relative_hd95["delta_gain"] == pytest.approx(0.0, abs=1e-3)
+    assert relative_hd95["favours"] == "tie"
+    assert relative_hd95["n_units"] == 24
+    # ASSD follows the same log-ratio rule
+    relative_assd = indexed.loc[("assd", "relative", "log_ratio")]
+    assert relative_assd["delta_gain"] == pytest.approx(0.0, abs=1e-3)
+
+    # Dice: the absolute gain is 0.04 vs 0.10, the recovered fraction is 0.2 for both
+    absolute_dice = indexed.loc[("dice", "absolute", "")]
+    assert abs(absolute_dice["delta_gain"]) == pytest.approx(0.06, abs=3e-3)
+    relative_dice = indexed.loc[("dice", "relative", "remaining_error")]
+    assert relative_dice["gain_reference"] == pytest.approx(0.2, abs=1e-3)
+    assert relative_dice["gain_compared"] == pytest.approx(0.2, abs=1e-3)
+    assert relative_dice["delta_gain"] == pytest.approx(0.0, abs=1e-3)
+
+
+def test_relative_gain_drops_undefined_transforms() -> None:
+    """A zero distance or a perfect baseline has no relative gain; absolute still works."""
+    rows = []
+    for index in range(6):
+        group = f"u{index}"
+        for method in ("baseline", "tta4"):
+            degenerate = index == 0 and method == "baseline"  # HD95 = 0 and Dice = 1
+            hd95 = 0.0 if degenerate else 10.0
+            dice = 1.0 if degenerate else 0.5
+            for metric, value in (("hd95", hd95), ("dice", dice)):
+                rows.append(
+                    {
+                        "run_id": "run-0",
+                        "seed": 0,
+                        "fold": 0,
+                        "split": "test",
+                        "case_id": f"c{index}",
+                        "group_id": group,
+                        "method": method,
+                        "metric": metric,
+                        "value": float(value),
+                        "empty_flag": "both_nonempty",
+                        "missed_detection": 0,
+                    }
+                )
+    model = ModelRuns(name="m", frames_by_seed={0: [pd.DataFrame(rows)]})
+    table = gain_difference_table([model, model], n_bootstrap=50).set_index(
+        ["metric", "scale"]
+    )
+    # the video with the degenerate baseline contributes to neither relative row
+    assert table.loc[("hd95", "absolute"), "n_units"] == 6
+    assert table.loc[("hd95", "relative"), "n_units"] == 5
+    assert table.loc[("dice", "relative"), "n_units"] == 5
+    relative = table.loc[("hd95", "relative")]
+    assert np.isfinite(relative["gain_reference"])  # no log(0), no inf
+    assert relative["relative_definition"] == "log_ratio"
 
     rng = np.random.default_rng(7)
     control = 0.6 + rng.normal(scale=0.1, size=40)

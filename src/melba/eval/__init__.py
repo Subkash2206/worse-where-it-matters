@@ -66,7 +66,9 @@ from .uncertainty_audit import (
     view_agreement_dir,
 )
 from .compare import (
+    LOG_RATIO_GAIN_METRICS,
     METHODS,
+    REMAINING_ERROR_GAIN_METRICS,
     ModelRuns,
     cluster_bootstrap_correlation,
     deltas_table,
@@ -75,6 +77,7 @@ from .compare import (
     method_table,
     missed_detection_table,
     paired_swap_null,
+    relative_gain_scales,
     residual_error_table,
     tail_table_for_models,
 )
@@ -86,9 +89,11 @@ __all__ = [
     "ENSEMBLES",
     "ENSEMBLE_VIEWS",
     "EXTRA_COMPARISONS",
+    "LOG_RATIO_GAIN_METRICS",
     "METRIC_LABELS",
     "NON_QUALITY_METRICS",
     "PENALIZED_SOURCE_METRICS",
+    "REMAINING_ERROR_GAIN_METRICS",
     "RESULT_COLUMNS",
     "AggregateResult",
     "EvaluationResult",
@@ -133,6 +138,7 @@ __all__ = [
     "pooled_method_table",
     "pooled_seed_table",
     "read_long_csv",
+    "relative_gain_scales",
     "residual_error_table",
     "roi_diagnostics",
     "run_evaluation",

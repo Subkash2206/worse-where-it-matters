@@ -18,7 +18,10 @@ ResNet-50 UNet and SwinUNETR runs of the same 5x3 protocol):
   and the raw ``Spearman(control, delta)`` is kept as a secondary, explicitly biased
   column.  Every CI resamples whole videos (frames of a video are not independent);
 * the **between-model gain difference**: per video, is the TTA gain of one model
-  different from the other's (Wilcoxon + paired bootstrap CI on the difference)?
+  different from the other's (Wilcoxon + paired bootstrap CI on the difference)?  Each
+  metric is reported on two scales: ``absolute`` (metric units, not comparable across
+  models on different scales) and ``relative`` — ``log(treatment / control)`` for
+  distances and ``(treatment - control) / (1 - control)`` for Dice.
 """
 
 from __future__ import annotations
@@ -41,8 +44,10 @@ from melba.stats import (
 )
 
 __all__ = [
+    "LOG_RATIO_GAIN_METRICS",
     "METHODS",
     "ModelRuns",
+    "REMAINING_ERROR_GAIN_METRICS",
     "TABLE_METRICS",
     "cluster_bootstrap_correlation",
     "deltas_table",
@@ -51,6 +56,7 @@ __all__ = [
     "method_table",
     "missed_detection_table",
     "paired_swap_null",
+    "relative_gain_scales",
     "residual_error_table",
     "tail_table_for_models",
 ]
@@ -541,12 +547,73 @@ def residual_error_table(
     return pd.DataFrame(rows)
 
 
+#: distance metrics whose *relative* gain is ``log(treatment / control)``
+LOG_RATIO_GAIN_METRICS: tuple[str, ...] = ("hd", "hd95", "hd95_pooled", "assd")
+#: overlap metrics whose *relative* gain is the fraction of the remaining error
+REMAINING_ERROR_GAIN_METRICS: tuple[str, ...] = ("dice", "jaccard")
+
+
+def relative_gain_scales(metric: str) -> tuple[str, ...]:
+    """Relative scales a metric supports (``absolute`` is always reported as well)."""
+    base = str(metric).replace("_penalized", "")
+    if base in LOG_RATIO_GAIN_METRICS:
+        return ("log_ratio",)
+    if base in REMAINING_ERROR_GAIN_METRICS:
+        return ("remaining_error",)
+    return ()
+
+
+def _case_gain(control: pd.Series, treatment: pd.Series, *, scale: str) -> np.ndarray:
+    """Per-case gain in the requested scale (NaN when the transform is undefined).
+
+    * ``absolute`` — ``treatment - control`` in the metric's own units;
+    * ``log_ratio`` — ``log(treatment / control)``, so a 10 % reduction counts the same
+      at 90 px and at 40 px; needs both values to be strictly positive;
+    * ``remaining_error`` — ``(treatment - control) / (1 - control)``, the fraction of
+      the error the treatment recovers; needs ``control < 1``.
+    """
+    control_values = np.asarray(control, dtype=float)
+    treatment_values = np.asarray(treatment, dtype=float)
+    if scale == "absolute":
+        return treatment_values - control_values
+    if scale == "log_ratio":
+        usable = (control_values > 0.0) & (treatment_values > 0.0)
+        gains = np.full(control_values.shape, np.nan, dtype=float)
+        gains[usable] = np.log(treatment_values[usable] / control_values[usable])
+        return gains
+    if scale == "remaining_error":
+        usable = np.isfinite(control_values) & (control_values < 1.0)
+        gains = np.full(control_values.shape, np.nan, dtype=float)
+        gains[usable] = (treatment_values[usable] - control_values[usable]) / (
+            1.0 - control_values[usable]
+        )
+        return gains
+    raise ValueError(f"unknown gain scale {scale!r}")
+
+
+def _per_unit_gain(
+    wide: pd.DataFrame,
+    *,
+    scale: str,
+    control: str,
+    treatment: str,
+    unit: str,
+) -> pd.Series:
+    """Mean gain per unit (video) for one model, dropping undefined transforms."""
+    gains = _case_gain(wide[control], wide[treatment], scale=scale)
+    frame = wide.assign(gain=gains)
+    frame = frame.loc[np.isfinite(frame["gain"])]
+    if frame.empty:
+        return pd.Series(dtype=float)
+    return frame.groupby(unit)["gain"].mean()
+
+
 def gain_difference_table(
     models: Sequence[ModelRuns],
     *,
     treatment: str = "tta4",
     control: str = "baseline",
-    metrics: Sequence[str] = ("dice", "hd95"),
+    metrics: Sequence[str] = ("dice", "hd95", "assd"),
     unit: str = "group_id",
     n_bootstrap: int = 2000,
     ci: float = 0.95,
@@ -554,16 +621,29 @@ def gain_difference_table(
 ) -> pd.DataFrame:
     """Between-model test: is the video-level TTA gain of one model larger than another's?
 
-    The gain is ``treatment - control`` in the metric's own units, averaged per video
-    inside each model; the two models are then paired **by video** and the difference of
-    gains is tested with a Wilcoxon signed-rank test and a paired bootstrap CI of the
-    mean difference (videos resampled as blocks).  The first model is the reference, so
-    with the UNet and SwinUNETR configs the table answers "is the SwinUNETR TTA gain
-    larger than the UNet's?".
+    The gain is computed per case, averaged per video inside each model, and the two
+    models are paired **by video**; ``delta_gain = compared - reference`` is tested with a
+    Wilcoxon signed-rank test and a paired bootstrap CI of the mean difference (videos
+    resampled as blocks).  The first model is the reference, so with the UNet and
+    SwinUNETR configs the table answers "is the SwinUNETR TTA gain larger than the
+    UNet's?".
+
+    Every metric is reported twice, marked by ``scale``:
+
+    * ``scale=absolute`` — ``treatment - control`` in the metric's own units, which is not
+      comparable across models on different scales (SwinUNETR's HD95 of ~90 px versus the
+      UNet's ~40 px);
+    * ``scale=relative`` — scale-free, with ``relative_definition`` saying how:
+      ``log_ratio`` = ``log(treatment / control)`` for distances (a 10 % reduction counts
+      the same at 90 px and at 40 px) and ``remaining_error`` =
+      ``(treatment - control) / (1 - control)`` for Dice (the fraction of the error the
+      treatment recovers).
 
     ``delta_gain`` is ``compared - reference``; ``favours`` names the model with the
     larger *gain* (not the better score: a negative HD95 gain can still be an
     improvement), and ``better_model`` names the model with the better mean score.
+    ``n_units`` can be smaller for the relative rows (a log ratio needs both values to be
+    positive, the remaining-error fraction needs ``control < 1``).
     """
     if len(models) < 2:
         return pd.DataFrame()
@@ -571,76 +651,94 @@ def gain_difference_table(
     rows: list[dict[str, Any]] = []
     for model in models[1:]:
         for metric in metrics:
-            gains: dict[str, pd.Series] = {}
-            scores: dict[str, pd.Series] = {}
+            frames: dict[str, pd.DataFrame] = {}
             for candidate in (reference, model):
                 wide = _paired_wide(
                     candidate.pooled(), metric=metric, control=control, treatment=treatment
                 )
                 if wide.empty:
-                    gains, scores = {}, {}
+                    frames = {}
                     break
-                wide = wide.assign(
-                    gain=wide[treatment] - wide[control],
-                    treatment_value=wide[treatment],
-                )
-                gains[candidate.name] = wide.groupby(unit)["gain"].mean()
-                scores[candidate.name] = wide.groupby(unit)["treatment_value"].mean()
-            if not gains:
+                frames[candidate.name] = wide
+            if not frames:
                 continue
-            paired = pd.concat(gains, axis=1, join="inner").dropna()
+            scores = {
+                name: wide.groupby(unit)[treatment].mean() for name, wide in frames.items()
+            }
             paired_scores = pd.concat(scores, axis=1, join="inner").dropna()
-            if len(paired) < 3:
-                continue
-            difference = (paired[model.name] - paired[reference.name]).to_numpy(dtype=float)
-            mean_difference = float(np.mean(difference))
-            low, high = bootstrap_ci_mean(
-                difference, n_bootstrap=n_bootstrap, ci=ci, seed=seed
+            scales = (("absolute", ""),) + tuple(
+                ("relative", definition) for definition in relative_gain_scales(metric)
             )
-            if np.all(difference == 0.0):
-                p_value = 1.0
-            else:
-                p_value = float(
-                    scipy_stats.wilcoxon(
-                        difference, zero_method="wilcox", alternative="two-sided"
-                    ).pvalue
+            for scale, definition in scales:
+                paired = pd.concat(
+                    {
+                        name: _per_unit_gain(
+                            wide,
+                            scale=definition or "absolute",
+                            control=control,
+                            treatment=treatment,
+                            unit=unit,
+                        )
+                        for name, wide in frames.items()
+                    },
+                    axis=1,
+                    join="inner",
+                ).dropna()
+                if len(paired) < 3:
+                    continue
+                difference = (paired[model.name] - paired[reference.name]).to_numpy(
+                    dtype=float
                 )
-            direction = metric_direction(metric)
-            gain_reference = float(paired[reference.name].mean())
-            gain_compared = float(paired[model.name].mean())
-            if abs(mean_difference) < 1e-12:
-                favours = "tie"
-            elif (mean_difference > 0) == (direction == "higher"):
-                favours = model.name
-            else:
-                favours = reference.name
-            score_reference = float(paired_scores[reference.name].mean())
-            score_compared = float(paired_scores[model.name].mean())
-            better_model = (
-                model.name
-                if (score_compared > score_reference) == (direction == "higher")
-                else reference.name
-            )
-            rows.append(
-                {
-                    "metric": metric,
-                    "reference": reference.name,
-                    "compared": model.name,
-                    "treatment": treatment,
-                    "control": control,
-                    "metric_direction": direction,
-                    "n_units": int(len(paired)),
-                    "gain_reference": gain_reference,
-                    "gain_compared": gain_compared,
-                    "delta_gain": mean_difference,
-                    "ci_low": float(low),
-                    "ci_high": float(high),
-                    "p_value": p_value,
-                    "favours": favours,
-                    "score_reference": score_reference,
-                    "score_compared": score_compared,
-                    "better_model": better_model,
-                }
-            )
+                mean_difference = float(np.mean(difference))
+                low, high = bootstrap_ci_mean(
+                    difference, n_bootstrap=n_bootstrap, ci=ci, seed=seed
+                )
+                if np.all(difference == 0.0):
+                    p_value = 1.0
+                else:
+                    p_value = float(
+                        scipy_stats.wilcoxon(
+                            difference, zero_method="wilcox", alternative="two-sided"
+                        ).pvalue
+                    )
+                direction = metric_direction(metric)
+                gain_reference = float(paired[reference.name].mean())
+                gain_compared = float(paired[model.name].mean())
+                if abs(mean_difference) < 1e-12:
+                    favours = "tie"
+                elif (mean_difference > 0) == (direction == "higher"):
+                    favours = model.name
+                else:
+                    favours = reference.name
+                score_reference = float(paired_scores[reference.name].mean())
+                score_compared = float(paired_scores[model.name].mean())
+                better_model = (
+                    model.name
+                    if (score_compared > score_reference) == (direction == "higher")
+                    else reference.name
+                )
+                rows.append(
+                    {
+                        "metric": metric,
+                        "scale": scale,
+                        "relative_definition": definition,
+                        "reference": reference.name,
+                        "compared": model.name,
+                        "treatment": treatment,
+                        "control": control,
+                        "metric_direction": direction,
+                        "n_units": int(len(paired)),
+                        "gain_reference": gain_reference,
+                        "gain_compared": gain_compared,
+                        "delta_gain": mean_difference,
+                        "ci_low": float(low),
+                        "ci_high": float(high),
+                        "p_value": p_value,
+                        "favours": favours,
+                        "score_reference": score_reference,
+                        "score_compared": score_compared,
+                        "better_model": better_model,
+                    }
+                )
     return pd.DataFrame(rows)
 
