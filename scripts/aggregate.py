@@ -39,6 +39,7 @@ from melba.eval import (  # noqa: E402
     frames_by_seed,
     per_fold_table,
     pooled_method_table,
+    run_uncertainty_audit,
     seed_averaged_frame,
     sensitivity_table,
     string_ids,
@@ -115,6 +116,7 @@ def _write_summary_markdown(
     runs,
     folds_found,
     seeds_found,
+    audit: dict | None = None,
 ) -> Path:
     """Write ``summary.md`` with the protocol sections (a)-(g)."""
     from melba.eval import write_markdown
@@ -213,7 +215,10 @@ def _write_summary_markdown(
             "(f) Do the TTA uncertainty descriptors rank errors?",
             pick(uncertainty, *uncertainty_columns),
             "Spearman rho against HD95 and 1-Dice, and AUROC for detecting a failure "
-            "(Dice < 0.5 or missed detection); row `seed=-1` is the seed-averaged set.",
+            "(Dice < 0.5 or missed detection); row `seed=-1` is the seed-averaged set. "
+            "`n_cases` is the cohort size, NOT the number of cases used: the ROI "
+            "descriptors are undefined (NaN) for empty predictions and are silently "
+            "dropped, which is what the (f-audit) tables below quantify.",
         ),
         (
             "(g) Baseline Dice per fold",
@@ -226,6 +231,62 @@ def _write_summary_markdown(
             "`ensemble3` and `ensemble3_tta4` against `baseline` and `tta4`.",
         ),
     ]
+    if audit is not None:
+        sections.extend(
+            [
+                (
+                    "(f-audit) ROI diagnostics for failures",
+                    audit["roi_diagnostics"],
+                    "The ROI descriptors are undefined when the predicted mask is empty "
+                    "(`n_entropy_roi_nan`) and can be near zero when it is tiny, so the "
+                    "NaNs would silently drop missed detections from any correlation/AUROC.",
+                ),
+                (
+                    "(f-audit) AUROC for failure detection, three definitions",
+                    _subset(
+                        audit["auroc"],
+                        [
+                            "predictor",
+                            "failure_definition",
+                            "auroc",
+                            "ci_low",
+                            "ci_high",
+                            "n_used",
+                            "n_failures",
+                            "n_undefined",
+                            "auroc_if_undefined_certain",
+                            "auroc_if_undefined_uncertain",
+                        ],
+                    ),
+                    "`all_failures` = Dice < 0.5 or missed; `non_missed_failures` excludes "
+                    "missed detections (every predictor is defined there); "
+                    "`missed_vs_clean` contrasts missed detections with clean cases only. "
+                    "`n_used`/`n_undefined` make the NaN drop visible, and the two bound "
+                    "columns score the undefined cases as maximally certain/uncertain. "
+                    "CIs resample videos (29 clusters).",
+                ),
+                (
+                    "(f-audit) Spearman against HD95 and 1 - Dice (all predictors)",
+                    _subset(
+                        audit["spearman"],
+                        ["predictor", "target", "n_used", "spearman_rho", "p_value"],
+                    ),
+                    "Pooled over folds and seeds (seed-averaged values); `n_used` counts the "
+                    "finite pairs, so ROI descriptors lose the missed detections here.",
+                ),
+                (
+                    "(f-audit) tta4 entropy(ROI) vs each alternative (paired bootstrap)",
+                    _subset(
+                        audit["tests"],
+                        ["compared_with", "delta_auroc", "ci_low", "ci_high", "p_value", "n_used"],
+                    ),
+                    "Definition `non_missed_failures`, paired video-cluster bootstrap of the "
+                    "AUROC difference (positive = tta4 entropy in the ROI is better).",
+                ),
+            ]
+        )
+        for note in audit.get("notes", []):
+            sections.append(("Audit note", note, ""))
     return Path(
         write_markdown(
             str(Path(output_dir) / "summary.md"),
@@ -409,6 +470,64 @@ def main(argv: list[str] | None = None) -> int:
     tables.update(extra_tables)
     extra_paths = write_tables(extra_tables, output_dir)
 
+    # ---- uncertainty audit: ROI semantics, three failure definitions, baselines ----
+    audit = run_uncertainty_audit(
+        runs,
+        averaged,
+        by_seed=by_seed,
+        n_bootstrap=min(1000, n_bootstrap),
+        ci=ci,
+        seed=bootstrap_seed,
+        band_px=int(config.get("evaluation.uncertainty_boundary_band_px", 3)),
+    )
+    audit_tables = {
+        "uncertainty_audit_per_case": audit["per_case"],
+        "uncertainty_audit_auroc": audit["auroc"],
+        "uncertainty_audit_spearman": audit["spearman"],
+        "uncertainty_audit_tests": audit["tests"],
+        "uncertainty_audit_roi": audit["roi_diagnostics"],
+    }
+    extra_tables.update(audit_tables)
+    extra_paths.update(write_tables(audit_tables, output_dir))
+    for note in audit["notes"]:
+        print(f"audit: {note}")
+    _print_table(
+        "uncertainty audit: AUROC for failure detection (all / non-missed / missed-only)",
+        audit["auroc"].loc[
+            audit["auroc"]["predictor"].isin(
+                [
+                    "tta4_entropy_roi",
+                    "pred_area_px",
+                    "one_minus_confidence",
+                    "baseline_entropy_roi",
+                    "ensemble3_entropy_roi",
+                    "ensemble3_variance_roi",
+                ]
+            )
+        ],
+        columns=[
+            "predictor",
+            "failure_definition",
+            "auroc",
+            "ci_low",
+            "ci_high",
+            "n_used",
+            "n_failures",
+            "n_undefined",
+        ],
+        max_rows=30,
+    )
+    _print_table(
+        "uncertainty audit: tta4 entropy(ROI) vs each alternative (paired bootstrap)",
+        audit["tests"],
+        columns=["compared_with", "delta_auroc", "ci_low", "ci_high", "p_value", "n_used"],
+        max_rows=30,
+    )
+    _print_table(
+        "uncertainty audit: ROI diagnostics",
+        audit["roi_diagnostics"],
+    )
+
     _print_table(
         "per-method summary, frame level (mean +/- std across seeds)",
         extra_tables["method_summary"].loc[lambda frame: frame["level"] == "frame"],
@@ -452,6 +571,7 @@ def main(argv: list[str] | None = None) -> int:
         runs=runs,
         folds_found=folds_found,
         seeds_found=seeds_found,
+        audit=audit,
     )
 
     print(f"\ngit revision: {git_revision()}")

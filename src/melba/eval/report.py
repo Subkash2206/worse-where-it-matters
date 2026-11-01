@@ -350,6 +350,8 @@ def spearman(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
     mask = np.isfinite(x) & np.isfinite(y)
     if int(mask.sum()) < 3:
         return float("nan"), float("nan")
+    if float(np.ptp(x[mask])) == 0.0 or float(np.ptp(y[mask])) == 0.0:
+        return float("nan"), float("nan")  # a constant input has no defined rank correlation
     result = scipy_stats.spearmanr(x[mask], y[mask])
     return float(result.statistic), float(result.pvalue)
 
@@ -404,7 +406,7 @@ def sensitivity_table(
             seed=seed,
             correction=correction,
         )
-        table.insert(0, "treatment", treatment)
+        # analyze_sensitivity already records the treatment column
         tables.append(table)
     return pd.concat(tables, ignore_index=True) if tables else pd.DataFrame()
 

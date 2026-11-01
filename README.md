@@ -188,6 +188,14 @@ Writes under `results/aggregate/` (CSV per table plus a `summary.md` report):
   by the image diagonal (survivorship-bias check);
 * `uncertainty.csv` — Spearman rho of `view_disagreement` / `entropy_mean_roi`
   against HD95 and 1-Dice, plus AUROC for detecting failures;
+* `uncertainty_audit_*.csv` — the audit of those descriptors: ROI diagnostics for the
+  failures (empty / near-empty / size buckets), AUROC under three failure definitions
+  (all, non-missed, missed-only) with video-cluster bootstrap CIs, explicit
+  `n_used`/`n_undefined` counts and NaN bounds, Spearman for every predictor, and
+  paired bootstrap tests against trivial baselines (predicted area, 1 − confidence,
+  image entropy, single-view entropy) and the seed-ensemble entropy/variance. The ROI
+  descriptors are **undefined for an empty prediction**, so a plain AUROC silently
+  drops missed detections — this table makes that explicit;
 * `per_fold_baseline.csv` — fold-to-fold spread of the control method;
 * `summary.md` — all of the above rendered as markdown with the protocol notes.
 

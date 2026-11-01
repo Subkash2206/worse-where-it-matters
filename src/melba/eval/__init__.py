@@ -48,6 +48,14 @@ from .report import (
     uncertainty_table,
     write_markdown,
 )
+from .uncertainty_audit import (
+    auroc_ci,
+    auroc_difference,
+    auroc_nan_bounds,
+    map_statistics,
+    roi_diagnostics,
+    run_uncertainty_audit,
+)
 from .runner import EvaluationResult, evaluate, run_evaluation
 
 __all__ = [
@@ -67,6 +75,9 @@ __all__ = [
     "TailThresholds",
     "aggregate_all",
     "auroc",
+    "auroc_ci",
+    "auroc_difference",
+    "auroc_nan_bounds",
     "cluster_bootstrap_change",
     "compare_methods",
     "detection_table",
@@ -77,13 +88,16 @@ __all__ = [
     "load_ground_truth",
     "make_run_id",
     "map_dir_for",
+    "map_statistics",
     "markdown_table",
     "per_case_path",
     "per_fold_table",
     "pooled_method_table",
     "pooled_seed_table",
     "read_long_csv",
+    "roi_diagnostics",
     "run_evaluation",
+    "run_uncertainty_audit",
     "seed_averaged_frame",
     "sensitivity_table",
     "spearman",
