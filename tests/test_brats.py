@@ -6,6 +6,7 @@ GPU is needed.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -377,4 +378,125 @@ def test_predictions_placed_back_give_identical_metrics(tmp_path: Path, brats_ro
             assert right != right
         else:
             assert left == pytest.approx(right, rel=1e-6, abs=1e-9), name
+
+
+# ---------------------------------------------------------------------------
+# evaluation path: map-case cap (the fold 0 crash), native-grid metrics, empty reference
+# ---------------------------------------------------------------------------
+class _Tiny3D(torch.nn.Module):
+    """One 3x3x3 convolution: enough to drive the 3D evaluation runner on a CPU."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.conv = torch.nn.Conv3d(4, 1, kernel_size=3, padding=1)
+
+    def forward(self, volume: torch.Tensor) -> torch.Tensor:
+        return self.conv(volume)
+
+
+def _eval_config(tmp_path: Path, root: Path, **overrides):
+    settings: dict = {
+        "dataset.root": str(root),
+        "dataset.patch_size": [8, 8, 8],
+        "dataset.use_cache": False,
+        "dataset.split.output_pattern": str(tmp_path / "splits" / "brats2021_fold{fold}.csv"),
+        "device": "cpu",
+        "runtime.num_workers": 0,
+        "evaluation.fold": 0,
+        "evaluation.output_dir": str(tmp_path / "results"),
+        # 2x2x2 windows: the toy volumes are 16x20x24, the BraTS default roi is 128^3
+        "inference.sliding_window": {"roi": [16, 16, 16], "overlap": 0.5},
+        "model.checkpoint": None,
+        "model.init_filters": 8,
+        "training.checkpoint_dir": str(tmp_path / "checkpoints"),
+    }
+    settings.update(overrides)
+    return load_config(CONFIG, settings)
+
+
+def test_evaluation_keeps_only_the_capped_number_of_probability_maps(
+    tmp_path: Path, brats_root: Path
+) -> None:
+    """Regression: the seeded map-case cap aborted every evaluation of fold 0 (exit 4).
+
+    ``run_evaluation`` selected the cases whose probability maps are kept *before*
+    ``indices`` existed, so the reduced grid trained fold 0 for 96 epochs (best val Dice
+    0.939) and then failed four evaluations in a row with
+    ``UnboundLocalError: cannot access local variable 'indices'``.
+    """
+    from melba.eval import evaluate
+
+    root = tmp_path / "brats2021"
+    for index in range(10):  # 10 cases -> >= 2 test cases in fold 0, so the cap subsets
+        _write_case(root, f"BraTS2021_{index:05d}", et=index != 3, seed=index)
+    config = _eval_config(
+        tmp_path,
+        root,
+        **{
+            "evaluation.save_probability_maps": True,
+            "evaluation.probability_map_methods": ["baseline"],
+            "evaluation.probability_map_cases": 1,
+            "evaluation.probability_map_case_seed": 0,
+        },
+    )
+    cases = discover_brats_cases(config)
+    folds = folded_splits(cases, {case: case for case in cases}, n_folds=5, seed=2024)
+    for fold, records in folds.items():
+        write_split_csv(records, split_file_for_fold(config, fold), overwrite=True)
+
+    result = evaluate(
+        config, model=_Tiny3D(), output_dir=tmp_path / "out", progress=False
+    )
+
+    assert result.n_cases >= 2
+    maps = sorted((tmp_path / "out").rglob("*__mean.npy"))
+    assert len(maps) == 1  # one case x one method, not the whole fold
+    assert maps[0].parent.name.startswith("fold0_seed")  # one directory per fold+seed
+    assert maps[0].name.endswith("__baseline__mean.npy")
+    # the empty-ET cases stay visible in the provenance, even though they are not scored
+    metadata = json.loads(result.metadata_json.read_text(encoding="utf-8"))
+    counts = metadata["empty_flag_counts"]["baseline"]
+    assert sum(counts.values()) == result.n_cases
+    assert metadata["metrics"]["score_empty_reference"] is False
+
+
+def test_place_on_native_grid_pads_only_cropped_cases() -> None:
+    """The runner scores every case on its original grid (240x240x155 for BraTS)."""
+    from melba.eval.runner import _place_on_native_grid
+
+    cropped_prediction = np.zeros((4, 6, 8), dtype=np.float32)
+    cropped_prediction[1:3, 2:5, 3:7] = 0.75
+    sample = {"crop_offset": (3, 5, 7), "original_size": (10, 12, 16)}
+
+    padded_pred, padded_target = _place_on_native_grid(
+        cropped_prediction, cropped_prediction.copy(), sample
+    )
+    assert padded_pred.shape == (10, 12, 16)
+    assert padded_target.shape == (10, 12, 16)
+    np.testing.assert_array_equal(
+        padded_pred[3:7, 5:11, 7:15], cropped_prediction
+    )
+    assert padded_pred.sum() == pytest.approx(cropped_prediction.sum())
+    assert padded_pred[:, :3].sum() == 0.0  # padding is background, never foreground
+
+    # 2D datasets (CVC) and cached samples already on the full grid are passed through
+    plain = np.ones((6, 8), dtype=np.float32)
+    untouched_pred, untouched_target = _place_on_native_grid(plain, plain, {"case_id": "x"})
+    assert untouched_pred is plain and untouched_target is plain
+    full = {"crop_offset": (0, 0, 0), "original_size": (6, 8)}
+    same_pred, same_target = _place_on_native_grid(plain, plain, full)
+    assert same_pred.shape == (6, 8) and same_target.shape == (6, 8)
+
+
+def test_brats_configs_flag_empty_et_cases_instead_of_scoring_them_as_dice_one() -> None:
+    """Published BraTS ET Dice excludes the cases without enhancement; so do we."""
+    from melba.metrics import MetricSettings
+
+    for name in ("segresnet.yaml", "segresnet_reduced.yaml"):
+        settings = MetricSettings.from_config(
+            load_config(_REPO_ROOT / "configs" / "brats2021" / name)
+        )
+        assert settings.score_empty_reference is False, name
+        assert settings.empty_policy == "nan", name
+        assert "dice" in settings.names and "hd95" in settings.names, name
 

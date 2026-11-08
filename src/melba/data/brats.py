@@ -497,26 +497,31 @@ def place_on_full_grid(
     original_shape: Sequence[int],
     fill: float = 0.0,
 ) -> np.ndarray:
-    """Copy a cropped ``(C, d, h, w)`` array back into the original volume.
+    """Copy a cropped ``(*leading, d, h, w)`` array back into the original volume.
+
+    Any number of leading axes is allowed (no channel axis, one channel axis, or a stack
+    of views); only the trailing ``len(original_shape)`` axes are interpreted as spatial.
 
     A metric computed on the cropped grid and the same metric on this padded array are
     identical (a crop only removes voxels that are background in both masks), which is
-    what makes the cache safe for evaluation.
+    what makes the cache safe for evaluation; the runner still pads so that the reported
+    numbers live on the native 240x240x155 grid.
     """
     values = np.asarray(array)
     shape = tuple(int(value) for value in original_shape)
-    if values.ndim != len(shape) + 1:
+    if values.ndim < len(shape):
         raise ValueError(
-            f"expected (C, *spatial) with {len(shape)} spatial axes, got {values.shape}"
+            f"expected at least {len(shape)} spatial axes, got an array of shape {values.shape}"
         )
-    if any(int(size) > limit for size, limit in zip(values.shape[1:], shape)):
-        raise ValueError(f"cropped shape {values.shape[1:]} does not fit {shape}")
-    full = np.full((values.shape[0], *shape), fill, dtype=values.dtype)
+    spatial = values.shape[values.ndim - len(shape) :]
+    if any(int(size) > limit for size, limit in zip(spatial, shape)):
+        raise ValueError(f"cropped shape {spatial} does not fit {shape}")
+    leading = values.shape[: values.ndim - len(shape)]
+    full = np.full((*leading, *shape), fill, dtype=values.dtype)
     slices = tuple(
-        slice(int(offset), int(offset) + int(size))
-        for offset, size in zip(offsets, values.shape[1:])
+        slice(int(offset), int(offset) + int(size)) for offset, size in zip(offsets, spatial)
     )
-    full[(slice(None), *slices)] = values
+    full[(Ellipsis, *slices)] = values
     return full
 
 

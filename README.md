@@ -465,6 +465,16 @@ python scripts/run_grid.py --config configs/brats2021/segresnet_reduced.yaml \
     --pid-file logs/brats_reduced_grid.pid
 ```
 
+Re-running that command is safe (finished runs are skipped, a trained run is only
+re-evaluated, a partial run resumes from `last.pt`). To (re-)evaluate one trained fold
+without touching training — the `seed` override is required, the checkpoint pattern is
+`fold{fold}_seed{seed}/best.pt` and the default `seed` is 1234:
+
+```bash
+python scripts/evaluate.py --config configs/brats2021/segresnet_reduced.yaml \
+    --fold 0 --set seed=0
+```
+
 ## Metric definitions
 
 Computed per case, on the **native image grid** (predictions are resampled back to
@@ -491,6 +501,38 @@ counts as background. Empty masks are never silently dropped: the default
 `empty_flag` (`both_nonempty`, `both_empty`, `pred_empty`, `gt_empty`);
 `penalize` (image diagonal / boundary F1 = 0) is reserved for the sensitivity
 table.
+
+### Reference-empty cases (BraTS ET)
+
+The legacy "two empty masks are a perfect match" convention (`dice = 1`,
+`boundary_f1 = 1`) must not be used for a dataset that *contains* empty references:
+33 of the 1251 BraTS 2021 patients have no enhancing tumour, and scoring a correct
+empty prediction as Dice 1.0 adds `n_empty / n_cases` to the mean (+0.025 for one
+empty case in a 40-case validation subsample, +0.032 for the 8 empty cases in fold 0's
+251-case test split). `metrics.score_empty_reference: false` (set in
+`configs/brats2021/segresnet.yaml`) changes that:
+
+* `dice`, `jaccard` and `boundary_f1` become `nan` when the **reference** is empty
+  (`gt_empty` or `both_empty`), so the case is flagged in the per-case CSV but stays
+  out of the mean; under `empty_policy: penalize` it falls to the worst case (0) instead.
+* A **missed detection** (`pred_empty`, reference non-empty) is a real error and still
+  scores Dice 0 — it is not excluded.
+* The run metadata records `empty_flag_counts` per method, i.e. exactly how many cases
+  each mean was computed over (`n` in the summary CSV, which then differs from
+  `n_cases`).
+
+This affects the **evaluation only**. The training monitor (`val_dice` in
+`training_log.csv`) is a plain per-case mean of hard Dice at threshold 0.5 with
+`both empty -> 1.0`, on the same (brain-cropped) grid: it is a monitoring signal for
+early stopping, not a reported result.
+
+Evaluation runs on the **native grid** even when the dataset crops: the BraTS cache
+returns brain-cropped volumes, and the runner pads the prediction and the reference
+back to 240x240x155 (`crop_offset`/`original_size` from the cache index) before computing
+metrics. (The predictions themselves can differ marginally inside the sliding-window
+blending borders, because the window grid depends on the array extent; set
+`dataset.use_cache: false` for a final evaluation if a bit-identical uncached run is
+required.)
 
 ## Input normalization
 

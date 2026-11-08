@@ -266,6 +266,51 @@ def test_registry_volume_metrics_and_threshold() -> None:
     assert metrics["volume_difference_mm3"] == 0.0
 
 
+def test_empty_reference_is_flagged_not_scored_as_dice_one() -> None:
+    """A case without foreground in the reference must not be a "perfect" prediction.
+
+    BraTS 2021 has patients with no enhancing tumour (~3%), so the legacy
+    ``both empty -> Dice 1.0`` convention adds roughly one full point per 40 val cases.
+    ``score_empty_reference=False`` keeps the case visible (``empty_flag``) but leaves its
+    overlap metrics undefined, so it cannot enter -- let alone inflate -- the mean.
+    """
+    empty = np.zeros((6, 6), dtype=np.float32)
+    mask = np.zeros((6, 6), dtype=np.float32)
+    mask[1:3, 1:3] = 1.0
+
+    legacy = MetricSettings()
+    assert legacy.score_empty_reference is True
+    assert compute_case_metrics(empty, empty, spacing=1.0)["dice"] == 1.0
+
+    flagged = MetricSettings(score_empty_reference=False)
+    both_empty = compute_case_metrics(empty, empty, spacing=1.0, settings=flagged)
+    gt_empty = compute_case_metrics(mask, empty, spacing=1.0, settings=flagged)
+    missed = compute_case_metrics(empty, mask, spacing=1.0, settings=flagged)
+
+    assert both_empty["empty_flag"] == "both_empty"
+    assert gt_empty["empty_flag"] == "gt_empty"
+    for metrics in (both_empty, gt_empty):
+        assert math.isnan(metrics["dice"])
+        assert math.isnan(metrics["jaccard"])
+        # boundary F1 is the other score that reads 1.0 for two empty masks
+        assert math.isnan(metrics["boundary_f1"])
+    assert math.isnan(gt_empty["hd95"])
+    # a missed detection is a real error and still scores 0
+    assert missed["empty_flag"] == "pred_empty"
+    assert missed["dice"] == 0.0
+
+    # with the penalising policy the undefined scores fall to the worst case
+    penalised = compute_case_metrics(
+        empty,
+        empty,
+        spacing=1.0,
+        settings=MetricSettings(score_empty_reference=False, empty_policy="penalize"),
+    )
+    assert penalised["dice"] == 0.0
+    assert penalised["jaccard"] == 0.0
+    assert penalised["boundary_f1"] == 0.0
+
+
 def test_metric_settings_from_config(base_config) -> None:
     settings = MetricSettings.from_config(base_config)
     assert settings.empty_policy == "nan"

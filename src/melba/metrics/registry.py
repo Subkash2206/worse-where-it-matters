@@ -57,6 +57,10 @@ GT_METRICS: tuple[str, ...] = OVERLAP_METRICS + DISTANCE_METRICS + VOLUME_METRIC
 AVAILABLE_METRICS: tuple[str, ...] = GT_METRICS + UNCERTAINTY_METRICS
 EMPTY_POLICIES: tuple[str, ...] = ("nan", "penalize")
 EMPTY_FLAGS: tuple[str, ...] = ("both_nonempty", "both_empty", "pred_empty", "gt_empty")
+#: similarity scores that are conventionally 1.0 when *both* masks are empty (Dice and
+#: Jaccard by definition, boundary F1 because there is no boundary to disagree on).  With
+#: ``score_empty_reference=False`` they become undefined instead of "perfect".
+SCORING_METRICS: tuple[str, ...] = ("dice", "jaccard", "boundary_f1")
 
 
 def empty_flag(pred: np.ndarray, target: np.ndarray) -> str:
@@ -81,9 +85,18 @@ class MetricSettings:
     connectivity: int = 1
     boundary_tolerance_mm: float = 2.0
     empty_policy: str = "nan"
+    # ``True`` (legacy): two empty masks are a perfect match, so Dice/Jaccard = 1.0 when
+    # the reference is empty (and the prediction too).  ``False``: a case whose reference
+    # is empty is never scored as a success -- the overlap metrics become ``nan`` (they are
+    # undefined, the case is flagged through ``empty_flag``) and the case is left out of
+    # the mean instead of inflating it.  BraTS-style datasets must use ``False``: ~3% of
+    # the cases have no enhancing tumour, and "Dice 1.0 for a correct empty prediction"
+    # silently adds ~0.03-0.05 to the mean.
+    score_empty_reference: bool = True
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "names", tuple(self.names))
+        object.__setattr__(self, "score_empty_reference", bool(self.score_empty_reference))
         unknown = [name for name in self.names if name not in AVAILABLE_METRICS]
         if unknown:
             raise ValueError(f"Unknown metric(s) {unknown}; available: {list(AVAILABLE_METRICS)}")
@@ -225,6 +238,13 @@ def compute_case_metrics(
                 value = 0.0 if name == "boundary_f1" else penalty
             elif not both_empty:
                 value = 0.0
+        if not settings.score_empty_reference and flag in ("gt_empty", "both_empty"):
+            # A case without reference foreground must not be counted as a success: the
+            # similarity scores are undefined (``nan``) and stay out of the mean, or fall
+            # to the worst case under the penalising policy.  ``empty_flag`` keeps the case
+            # visible in the per-case CSV.
+            if name in SCORING_METRICS:
+                value = 0.0 if settings.empty_policy == "penalize" else float("nan")
         results[name] = float(value)
 
     results["empty_flag"] = flag

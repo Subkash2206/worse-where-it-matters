@@ -26,6 +26,7 @@ import torch.nn.functional as functional
 
 from melba.config import Config, ConfigError
 from melba.data import build_dataset
+from melba.data.brats import place_on_full_grid
 from melba.inference import (
     TTAMethod,
     aggregate_probabilities,
@@ -308,30 +309,6 @@ def run_evaluation(
             f"available: {sorted(method.name for method in methods)}"
         )
     save_variance = bool(config.get("evaluation.save_variance_maps", False))
-    # Optional cap on how many cases keep their probability maps (figures only): a fixed,
-    # seeded subset of the evaluated cases, so a re-run selects exactly the same ones.
-    map_case_limit = config.get("evaluation.probability_map_cases")
-    map_case_seed = int(config.get("evaluation.probability_map_case_seed", 0))
-    map_case_ids: set[str] | None = None
-    if map_case_limit is not None:
-        limit = int(map_case_limit)
-        case_ids: list[str] = []
-        if limit < len(indices):
-            items = getattr(dataset, "items", None)
-            if items is not None:
-                # ask the dataset item for its id instead of loading the volume
-                case_ids = [str(items[index].case_id) for index in indices]
-            else:  # pragma: no cover - a dataset without item descriptors
-                case_ids = [str(dataset[index]["case_id"]) for index in indices]
-        if case_ids:
-            import numpy as _np
-
-            chosen = _np.sort(
-                _np.random.default_rng(map_case_seed).choice(
-                    len(case_ids), size=max(0, limit), replace=False
-                )
-            )
-            map_case_ids = {case_ids[int(position)] for position in chosen}
     map_setting = config.get("evaluation.probability_map_dir")
     map_base = config.resolve(map_setting) if map_setting else (output_path / "maps")
     # One sub-directory per run so the ensemble can pick up every fold/seed.
@@ -344,6 +321,33 @@ def run_evaluation(
     show_progress = bool(config.get("runtime.progress", True)) if progress is None else progress
     total_cases = len(dataset)
     indices = list(range(total_cases if limit is None else min(int(limit), total_cases)))
+
+    # Optional cap on how many cases keep their probability maps (figures only): a fixed,
+    # seeded subset of the evaluated cases, so a re-run selects exactly the same cases.
+    # Must come after `indices` exists; it only narrows which maps are written, never the
+    # evaluated cases themselves.
+    map_case_limit = config.get("evaluation.probability_map_cases")
+    map_case_seed = int(config.get("evaluation.probability_map_case_seed", 0))
+    map_case_ids: set[str] | None = None
+    if map_case_limit is not None:
+        map_cases = max(0, int(map_case_limit))
+        if map_cases < len(indices):
+            items = getattr(dataset, "items", None)
+            if items is not None:
+                # read the ids from the item descriptors instead of loading every volume
+                case_ids = [str(items[index].case_id) for index in indices]
+            else:  # pragma: no cover - a dataset without item descriptors
+                case_ids = [str(dataset[index]["case_id"]) for index in indices]
+            if case_ids:
+                import numpy as _np
+
+                chosen = _np.sort(
+                    _np.random.default_rng(map_case_seed).choice(
+                        len(case_ids), size=map_cases, replace=False
+                    )
+                )
+                map_case_ids = {case_ids[int(position)] for position in chosen}
+
     created = utc_now()
     groups: set[str] = set()
     rows_written = 0
@@ -416,9 +420,15 @@ def run_evaluation(
                 aggregated = aggregate_probabilities(
                     native_views[:, None], method.aggregator
                 )[0]
+                # BraTS-style datasets hand out brain-cropped arrays plus the crop origin:
+                # place the prediction and the reference back on the original
+                # 240x240x155 grid, so every case is scored on the native grid.  (Dice and
+                # the surface metrics are the same on both grids -- the crop only drops
+                # background-in-both voxels -- but the full grid is what a paper reports.)
+                metric_pred, metric_target = _place_on_native_grid(aggregated, target, sample)
                 metrics = compute_case_metrics(
-                    aggregated,
-                    target,
+                    metric_pred,
+                    metric_target,
                     spacing=spacing,
                     threshold=threshold,
                     settings=metric_settings,
@@ -441,7 +451,7 @@ def run_evaluation(
                 # Sensitivity values: the same distance metrics with an empty
                 # prediction penalised by the image diagonal (all cases, no NaN).
                 if emit_penalized:
-                    diagonal = grid_diagonal_mm(target.shape, spacing)
+                    diagonal = grid_diagonal_mm(metric_target.shape, spacing)
                     for name in PENALIZED_SOURCE_METRICS:
                         if name in values:
                             value = values[name]
@@ -520,6 +530,30 @@ def run_evaluation(
 evaluate = run_evaluation
 
 
+def _place_on_native_grid(
+    pred: np.ndarray, target: np.ndarray, sample: dict[str, Any]
+) -> tuple[np.ndarray, np.ndarray]:
+    """Undo a dataset-level crop, so metrics are computed on the original grid.
+
+    A dataset may return a cropped volume together with ``crop_offset`` (the crop origin)
+    and ``original_size`` (the full grid).  When both are present and the arrays are
+    smaller than the original volume, pred and target are padded back; otherwise they are
+    returned unchanged (2D datasets, uncached reads, and datasets that never crop).
+    """
+    offsets = sample.get("crop_offset")
+    original = sample.get("original_size")
+    if not offsets or not original:
+        return pred, target
+    shape = tuple(int(value) for value in original)
+    pred_values = np.asarray(pred)
+    target_values = np.asarray(target)
+    if tuple(target_values.shape[-len(shape) :]) == shape:
+        return pred_values, target_values
+    padded_target = place_on_full_grid(target_values, offsets=offsets, original_shape=shape)
+    padded_pred = place_on_full_grid(pred_values, offsets=offsets, original_shape=shape)
+    return padded_pred, padded_target
+
+
 def _finalise(
     *,
     config: Config,
@@ -554,6 +588,15 @@ def _finalise(
     frame = read_long_csv(per_case_csv)
     if summary_csv is not None:
         summarize_long(frame).to_csv(summary_csv, index=False)
+
+    # How many cases fell into each empty-mask class, per method: with
+    # ``metrics.score_empty_reference: false`` the empty-reference cases are excluded from
+    # the overlap means, so this count is what justifies the reported ``n``.
+    empty_flag_counts: dict[str, dict[str, int]] = {}
+    if "empty_flag" in frame.columns:
+        grouped = frame.groupby(["method", "empty_flag"], dropna=False)["case_id"].nunique()
+        for (method_name, flag), count in grouped.items():
+            empty_flag_counts.setdefault(str(method_name), {})[str(flag)] = int(count)
 
     checkpoint_info: dict[str, Any] = {"path": None, "sha256": None}
     if checkpoint_path is not None and checkpoint_path.is_file():
@@ -592,6 +635,7 @@ def _finalise(
             "methods": list(map_methods) if save_maps else [],
         },
         "metrics": asdict(metric_settings),
+        "empty_flag_counts": empty_flag_counts,
         "normalization": config.get("dataset.normalization"),
         "penalized_metrics": {
             "emitted": emit_penalized,

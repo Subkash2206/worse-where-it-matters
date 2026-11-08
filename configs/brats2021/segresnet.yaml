@@ -138,6 +138,10 @@ metrics:
   connectivity: 1                  # 6-neighbourhood
   boundary_tolerance_mm: 2.0
   empty_policy: nan
+  # A case with no enhancing tumour in the reference must not be scored as a success:
+  # its Dice is undefined (and is left out of the mean) instead of the legacy
+  # "two empty masks -> Dice 1.0", which would add ~1 empty case per 40 to the mean.
+  score_empty_reference: false
 
 evaluation:
   split: test
