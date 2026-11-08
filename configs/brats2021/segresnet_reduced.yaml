@@ -35,7 +35,10 @@ evaluation:
   split: test
   output_dir: results/${experiment.name}/evaluation
   write_summary: true
-  # float16 mean probability maps, only for the two methods the aggregate needs
+  # float16 mean probability maps, only for the two methods the aggregate needs, and only
+  # for 10 fixed (seeded) test cases per fold: these are for figures, not for statistics
   save_probability_maps: true
   probability_map_methods: [baseline, tta4]
+  probability_map_cases: 10
+  probability_map_case_seed: 0
   save_variance_maps: false

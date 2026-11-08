@@ -34,6 +34,7 @@ Decisions, and why:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -65,6 +66,12 @@ __all__ = [
 MODALITIES: tuple[str, ...] = ("flair", "t1", "t1ce", "t2")
 #: enhancing tumour in the BraTS 2021 label map
 ET_LABEL: int = 4
+#: supported targets
+TARGETS: tuple[str, ...] = ("et", "whole_tumour")
+#: voxels of context kept around the brain bounding box in the cache
+CACHE_MARGIN: int = 4
+#: default cache location (gitignored)
+CACHE_DIR = "cache/brats2021_pre"
 #: training augmentation groups
 BRATS_AUGMENTATION_GROUPS: tuple[str, ...] = (
     "geometric_3d",
@@ -169,20 +176,10 @@ def load_brats_items(config: Config, split: str, fold: int | None = None) -> lis
     ]
 
 
-def read_brats_case(
+def _read_raw_case(
     item: BraTSItem,
-    *,
-    target: str = "et",
-    low: float = 1.0,
-    high: float = 99.0,
 ) -> tuple[np.ndarray, np.ndarray, tuple[float, float, float]]:
-    """``(image (4, D, H, W) float32, mask (D, H, W) float32, spacing mm)`` for one case.
-
-    The four modalities are stacked in :data:`MODALITIES` order and normalized per
-    modality over the brain; the mask is ``label == ET_LABEL`` for ``target="et"``.
-    """
-    if target not in {"et", "whole_tumour"}:
-        raise ValueError(f"unknown BraTS target {target!r}; expected 'et' or 'whole_tumour'")
+    """Raw ``(4, D, H, W)`` float32 modalities, the label map and the spacing in mm."""
     arrays: list[np.ndarray] = []
     spacing: tuple[float, float, float] | None = None
     for modality in MODALITIES:
@@ -200,7 +197,7 @@ def read_brats_case(
                 f"({spacing} vs {image.header.get_zooms()[:3]})"
             )
         arrays.append(data)
-    stack = np.stack(arrays, axis=0)  # (4, D, H, W) or (4, H, W, D)
+    stack = np.stack(arrays, axis=0)  # (4, D, H, W)
     mask_image = nib.load(str(item.mask_path))
     labels = np.asarray(mask_image.get_fdata(dtype=np.float32))
     if labels.shape != stack.shape[1:]:
@@ -208,16 +205,35 @@ def read_brats_case(
             f"{item.case_id}: segmentation shape {labels.shape} does not match the "
             f"modalities {stack.shape[1:]}"
         )
-    if target == "et":
-        mask = (labels == float(ET_LABEL)).astype(np.float32)
-    else:
-        mask = (labels > 0).astype(np.float32)
+    return stack, labels, tuple(spacing or (1.0, 1.0, 1.0))
+
+
+def read_brats_case(
+    item: BraTSItem,
+    *,
+    target: str = "et",
+    low: float = 1.0,
+    high: float = 99.0,
+) -> tuple[np.ndarray, np.ndarray, tuple[float, float, float]]:
+    """``(image (4, D, H, W) float32, mask (D, H, W) float32, spacing mm)`` for one case.
+
+    The four modalities are stacked in :data:`MODALITIES` order and normalized per
+    modality over the brain; the mask is ``label == ET_LABEL`` for ``target="et"``.
+    """
+    if target not in TARGETS:
+        raise ValueError(f"unknown BraTS target {target!r}; expected one of {list(TARGETS)}")
+    stack, labels, spacing = _read_raw_case(item)
+    mask = (labels == float(ET_LABEL)) if target == "et" else (labels > 0)
     brain = stack.max(axis=0) > 0
     normalized = np.stack(
-        [percentile_normalize(stack[index], brain, low=low, high=high) for index in range(stack.shape[0])],
+        [
+            percentile_normalize(stack[index], brain, low=low, high=high)
+            for index in range(stack.shape[0])
+        ],
         axis=0,
     )
-    return normalized.astype(np.float32), mask, tuple(spacing or (1.0, 1.0, 1.0))
+    return normalized.astype(np.float32), mask.astype(np.float32), spacing
+
 
 
 def percentile_normalize(
@@ -325,6 +341,8 @@ class BRATSDataset(Dataset):
         foreground_crop_p: float = 0.9,
         seed: int = 0,
         fold: int = 0,
+        use_cache: bool = False,
+        cache_dir: str | Path = CACHE_DIR,
     ) -> None:
         if not items:
             raise ValueError("BRATSDataset needs at least one case")
@@ -340,6 +358,8 @@ class BRATSDataset(Dataset):
         self.foreground_crop_p = float(foreground_crop_p)
         self.seed = int(seed)
         self.fold = int(fold)
+        self.use_cache = bool(use_cache)
+        self.cache_dir = Path(cache_dir)
         self.epoch = 0
 
     def __len__(self) -> int:
@@ -382,11 +402,13 @@ class BRATSDataset(Dataset):
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         item = self.items[index]
-        image, mask, spacing = read_brats_case(
+        image, mask, spacing, meta = load_case_for_pipeline(
             item,
             target=self.target,
             low=self.low_percentile,
             high=self.high_percentile,
+            use_cache=self.use_cache,
+            cache_dir=self.cache_dir,
         )
         sample: dict[str, Any] = {
             "case_id": item.case_id,
@@ -394,7 +416,9 @@ class BRATSDataset(Dataset):
             "split": item.split,
             "fold": int(item.fold or self.fold),
             "spacing": spacing,
-            "original_size": tuple(image.shape[1:]),
+            "original_size": tuple(int(value) for value in meta["original_shape"]),
+            "crop_offset": tuple(int(value) for value in meta["offsets"]),
+            "source": meta["source"],
         }
         if self.train:
             image, mask = foreground_crop(
@@ -415,3 +439,212 @@ class BRATSDataset(Dataset):
         sample["mask_native"] = torch.from_numpy(mask).unsqueeze(0)
         return sample
 
+
+
+# ---------------------------------------------------------------------------
+# preprocessing cache: brain-cropped, normalized float16 volumes
+# ---------------------------------------------------------------------------
+def cache_paths(cache_dir: str | Path, case_id: str) -> tuple[Path, Path]:
+    """Where the cached image and label arrays of one case live."""
+    directory = Path(cache_dir)
+    return directory / f"{case_id}_image.npy", directory / f"{case_id}_seg.npy"
+
+
+def cache_meta_path(cache_dir: str | Path, case_id: str) -> Path:
+    """Per-case crop metadata (offsets, original shape, spacing) written beside the arrays."""
+    return Path(cache_dir) / f"{case_id}_meta.json"
+
+
+def cache_index_path(cache_dir: str | Path) -> Path:
+    return Path(cache_dir) / "index.json"
+
+
+def read_cache_index(cache_dir: str | Path) -> dict[str, dict]:
+    """The per-case crop metadata (``{}`` when the cache does not exist yet)."""
+    path = cache_index_path(cache_dir)
+    if path.is_file():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            cases = dict(payload.get("cases") or {})
+            if cases:
+                return cases
+        except (OSError, ValueError):  # pragma: no cover - corrupt index
+            pass
+    # no (or broken) summary index: rebuild it from the per-case sidecar files
+    cases = {}
+    for meta_path in sorted(Path(cache_dir).glob("*_meta.json")):
+        try:
+            entry = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):  # pragma: no cover - corrupt sidecar
+            continue
+        case_id = str(entry.get("case_id") or meta_path.stem[: -len("_meta")])
+        cases[case_id] = entry
+    return cases
+
+
+def write_cache_index(cache_dir: str | Path, cases: Mapping[str, Mapping]) -> Path:
+    path = cache_index_path(cache_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"cases": {key: dict(value) for key, value in sorted(cases.items())}}
+    path.write_text(json.dumps(payload, indent=1) + "\n", encoding="utf-8")
+    return path
+
+
+def place_on_full_grid(
+    array: np.ndarray,
+    *,
+    offsets: Sequence[int],
+    original_shape: Sequence[int],
+    fill: float = 0.0,
+) -> np.ndarray:
+    """Copy a cropped ``(C, d, h, w)`` array back into the original volume.
+
+    A metric computed on the cropped grid and the same metric on this padded array are
+    identical (a crop only removes voxels that are background in both masks), which is
+    what makes the cache safe for evaluation.
+    """
+    values = np.asarray(array)
+    shape = tuple(int(value) for value in original_shape)
+    if values.ndim != len(shape) + 1:
+        raise ValueError(
+            f"expected (C, *spatial) with {len(shape)} spatial axes, got {values.shape}"
+        )
+    if any(int(size) > limit for size, limit in zip(values.shape[1:], shape)):
+        raise ValueError(f"cropped shape {values.shape[1:]} does not fit {shape}")
+    full = np.full((values.shape[0], *shape), fill, dtype=values.dtype)
+    slices = tuple(
+        slice(int(offset), int(offset) + int(size))
+        for offset, size in zip(offsets, values.shape[1:])
+    )
+    full[(slice(None), *slices)] = values
+    return full
+
+
+
+
+def preprocess_case(
+    item: BraTSItem,
+    *,
+    cache_dir: str | Path = CACHE_DIR,
+    low: float = 1.0,
+    high: float = 99.0,
+    margin: int = CACHE_MARGIN,
+    overwrite: bool = False,
+) -> dict:
+    """Crop one case to its brain bounding box, normalize and store float16/uint8 arrays.
+
+    The crop offsets and the original shape go into the returned entry (and into the
+    cache index), so a prediction made on the cropped grid can be placed back on the
+    240x240x155 grid.  The original BraTS directory is only ever read.
+    """
+    image_path, seg_path = cache_paths(cache_dir, item.case_id)
+    if not overwrite and image_path.is_file() and seg_path.is_file():
+        meta_path = cache_meta_path(cache_dir, item.case_id)
+        if meta_path.is_file():
+            try:
+                entry = json.loads(meta_path.read_text(encoding="utf-8"))
+                return {**entry, "case_id": item.case_id, "skipped": True}
+            except (OSError, ValueError):  # pragma: no cover - corrupt sidecar
+                pass
+    stack, labels, spacing = _read_raw_case(item)
+    brain = stack.max(axis=0) > 0
+    index = np.argwhere(brain)
+    if index.size == 0:  # pragma: no cover - a completely empty volume
+        raise RuntimeError(f"{item.case_id}: no brain voxels found")
+    starts = np.maximum(index.min(axis=0) - int(margin), 0)
+    stops = np.minimum(index.max(axis=0) + int(margin) + 1, np.array(brain.shape))
+    slices = tuple(slice(int(start), int(stop)) for start, stop in zip(starts, stops))
+    cropped_brain = brain[slices]
+    normalized = np.stack(
+        [
+            percentile_normalize(
+                stack[channel][slices], cropped_brain, low=low, high=high
+            )
+            for channel in range(stack.shape[0])
+        ],
+        axis=0,
+    ).astype(np.float16)
+    cropped_labels = labels[slices].astype(np.uint8)
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    np.save(image_path, normalized)
+    np.save(seg_path, cropped_labels)
+    entry = {
+        "case_id": item.case_id,
+        "skipped": False,
+        "offsets": [int(value) for value in starts],
+        "original_shape": [int(value) for value in brain.shape],
+        "shape": [int(value) for value in normalized.shape[1:]],
+        "spacing": [float(value) for value in spacing],
+        "et_voxels": int((labels == float(ET_LABEL)).sum()),
+        "bytes": int(normalized.nbytes + cropped_labels.nbytes),
+    }
+    meta_path = cache_meta_path(cache_dir, item.case_id)
+    meta_path.write_text(json.dumps(entry, indent=1) + "\n", encoding="utf-8")
+    return entry
+
+
+def load_cached_case(
+    item: BraTSItem, *, cache_dir: str | Path = CACHE_DIR
+) -> dict | None:
+    """The cached arrays of one case (``None`` when it has not been preprocessed)."""
+    image_path, seg_path = cache_paths(cache_dir, item.case_id)
+    meta_path = cache_meta_path(cache_dir, item.case_id)
+    if not (image_path.is_file() and seg_path.is_file()):
+        return None
+    entry: dict | None = None
+    if meta_path.is_file():
+        try:
+            entry = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):  # pragma: no cover - corrupt sidecar
+            entry = None
+    if entry is None:  # older caches only have the summary index
+        entry = read_cache_index(cache_dir).get(item.case_id)
+    if entry is None:
+        return None
+    return {
+        "image": np.load(image_path).astype(np.float32),
+        "labels": np.load(seg_path),
+        "offsets": tuple(int(value) for value in entry["offsets"]),
+        "original_shape": tuple(int(value) for value in entry["original_shape"]),
+        "spacing": tuple(float(value) for value in entry["spacing"]),
+    }
+
+
+def load_case_for_pipeline(
+    item: BraTSItem,
+    *,
+    target: str = "et",
+    low: float = 1.0,
+    high: float = 99.0,
+    use_cache: bool = False,
+    cache_dir: str | Path = CACHE_DIR,
+) -> tuple[np.ndarray, np.ndarray, tuple[float, float, float], dict]:
+    """Like :func:`read_brats_case`, optionally from the brain-cropped cache.
+
+    Returns ``(image, mask, spacing, meta)``; ``meta`` carries the crop ``offsets`` and
+    ``original_shape`` so a prediction made on the cropped grid can be placed back on the
+    original 240x240x155 grid.
+    """
+    if target not in TARGETS:
+        raise ValueError(f"unknown BraTS target {target!r}; expected one of {list(TARGETS)}")
+    cached = load_cached_case(item, cache_dir=cache_dir) if use_cache else None
+    if cached is not None:
+        labels = cached["labels"].astype(np.float32)
+        mask = (labels == float(ET_LABEL)) if target == "et" else (labels > 0)
+        return (
+            cached["image"],
+            mask.astype(np.float32),
+            cached["spacing"],
+            {
+                "offsets": cached["offsets"],
+                "original_shape": cached["original_shape"],
+                "source": "cache",
+            },
+        )
+    image, mask, spacing = read_brats_case(item, target=target, low=low, high=high)
+    shape = tuple(int(value) for value in image.shape[1:])
+    return image, mask, spacing, {
+        "offsets": (0, 0, 0),
+        "original_shape": shape,
+        "source": "nifti",
+    }

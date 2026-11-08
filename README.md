@@ -429,25 +429,40 @@ depth flip.
 
 Measured on the real data (fold 0, RTX 4050 6 GB, AMP, 40 patches/epoch, 40 val volumes):
 
-| measurement | value |
-|---|---|
-| peak VRAM | **2663 MiB allocated / 3212 MiB reserved** of 6 GB |
-| training | **1.53 s per 128^3 patch** (includes reading + normalizing a 240^3 volume) |
-| validation | **2.23 s per volume** (18 sliding windows of 128^3) |
-| epoch | 152.9 s (median over two epochs) |
+| measurement | straight from NIfTI | from the cache |
+|---|---|---|
+| peak VRAM | **2663 MiB allocated / 3212 MiB reserved** | **2663 MiB / 2936 MiB** |
+| training | 1.53 s per 128^3 patch | **0.35 s per patch** |
+| validation | 2.23 s per volume | **0.92 s per volume** |
+| epoch (250 patches + 40 volumes) | 7.9 min | **2.1 min** |
+
+The cache (`scripts/preprocess_brats.py`, gitignored `cache/brats2021_pre/`, **1251 cases in
+13 min, 39.3 GB**) holds each case cropped to its brain bounding box + 4 voxels
+(mean crop `145x179x144`), normalized per modality, as float16 images and uint8 labels, plus
+`<case>_meta.json` with the crop offsets and the original shape. Reading is a `.npy` load
+instead of four NIfTI reads + percentile normalization; `dataset.use_cache` switches it on
+and a case missing from the cache silently falls back to the NIfTI files. Cropping is
+metric-safe: `place_on_full_grid` puts a cropped prediction back on the 240x240x155 grid,
+and Dice/HD95/ASSD/boundary-F1 are identical on both grids (tested), because the crop only
+drops voxels that are background in both masks. Nothing below `dataset.root` is written.
 
 The reduced protocol (`segresnet_reduced.yaml`: 5 folds x 1 seed, 100 epochs max, patience
 20 on val Dice, **250 random patches per epoch** via `training.max_patches_per_epoch`,
 validation on a fixed seeded **40-case** subsample via `training.val_limit`, test on the
-whole test fold with all four TTA methods, float16 mean maps for `baseline` and `tta4`)
-therefore costs ~7.9 min per epoch, i.e. **~6.5 h of training for 50 epochs plus ~2.3 h of
-test-time TTA evaluation per run, ~44 h for the five folds** (~31 h if early stopping lands
-near 30 epochs, ~77 h if every fold runs the full 100). The grid has **not** been launched:
+whole test fold with `baseline/tta2/tta4/tta8`, float16 mean maps for `baseline` and `tta4`
+of **10 fixed seeded test cases per fold** via `evaluation.probability_map_cases`) therefore
+costs ~2.1 min per epoch, and the TTA evaluation of a 251-case test fold ~1.0 h:
+
+| scenario | training/run | + TTA eval | per run | 5 folds |
+|---|---|---|---|---|
+| early stop ≈ 30 epochs | 1.0 h | 1.0 h | **2.0 h** | **≈ 10 h** |
+| ≈ 50 epochs | 1.7 h | 1.0 h | **2.7 h** | **≈ 13.5 h** |
+| full 100-epoch cap | 3.4 h | 1.0 h | **4.4 h** | **≈ 22 h** |
 
 ```bash
 python scripts/run_grid.py --config configs/brats2021/segresnet_reduced.yaml \
     --folds 0 1 2 3 4 --seeds 0 --epochs 100 --patience 20 \
-    --pid-file logs/cvc_brats_reduced_grid.pid
+    --pid-file logs/brats_reduced_grid.pid
 ```
 
 ## Metric definitions

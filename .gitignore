@@ -4,6 +4,8 @@
 /brats2021/
 # synthetic BraTS volumes (tests / dry runs; regenerate with scripts/make_synthetic_brats.py)
 /brats2021_synthetic/
+# preprocessed caches (scripts/preprocess_brats.py; ~40 GB)
+/cache/
 data/*
 !data/splits/
 !data/splits/**

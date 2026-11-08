@@ -74,6 +74,8 @@ def _config(tmp_path: Path, root: Path):
         CONFIG,
         {
             "dataset.root": str(root),
+            "dataset.patch_size": [8, 8, 8],  # tiny toy volumes: keep the crop smaller
+            "dataset.use_cache": False,
             "dataset.split.output_pattern": str(tmp_path / "splits" / "brats2021_fold{fold}.csv"),
             "device": "cpu",
             "runtime.num_workers": 0,
@@ -176,8 +178,8 @@ def test_dataset_train_crop_and_eval_volume(tmp_path: Path, brats_root: Path) ->
 
     train = build_dataset(config, "train", train=True, fold=0)
     sample = train[0]
-    assert sample["image"].shape == (4, 128, 128, 128)  # patch_size from the config
-    assert sample["mask"].shape == (1, 128, 128, 128)
+    assert sample["image"].shape == (4, 8, 8, 8)  # patch_size from the config
+    assert sample["mask"].shape == (1, 8, 8, 8)
     assert sample["mask"].dtype == torch.float32
     assert set(torch.unique(sample["mask"]).tolist()) <= {0.0, 1.0}
     assert sample["spacing"] == pytest.approx(SPACING)
@@ -289,4 +291,90 @@ def test_sliding_window_config_validation() -> None:
         build_sliding_window(
             load_config(CONFIG, {"inference.sliding_window": {"overlap": 0.5, "bogus": 1}})
         )
+
+
+
+def _cache_case(tmp_path: Path, brats_root: Path, case_index: int = 0):
+    from melba.data.brats import BraTSItem, preprocess_case
+
+    cache_dir = tmp_path / "cache"
+    case = f"BraTS2021_{case_index:05d}"
+    item = BraTSItem(
+        case_id=case, group_id=case, split="test", directory=brats_root / case
+    )
+    entry = preprocess_case(item, cache_dir=cache_dir, margin=4)
+    return item, cache_dir, entry
+
+
+def test_cached_case_matches_the_nifti_at_the_same_crop(tmp_path: Path, brats_root: Path) -> None:
+    """The float16 cache must reproduce the uncached arrays inside the crop."""
+    from melba.data.brats import load_case_for_pipeline
+
+    item, cache_dir, entry = _cache_case(tmp_path, brats_root)
+    cached, cached_mask, cached_spacing, meta = load_case_for_pipeline(
+        item, use_cache=True, cache_dir=cache_dir
+    )
+    full, full_mask, full_spacing, full_meta = load_case_for_pipeline(item, use_cache=False)
+
+    assert meta["source"] == "cache" and full_meta["source"] == "nifti"
+    assert cached_spacing == pytest.approx(full_spacing)
+    assert tuple(meta["original_shape"]) == full.shape[1:]  # 240x240x155 in the real data
+    offsets = tuple(int(value) for value in meta["offsets"])
+    slices = tuple(
+        slice(offset, offset + size)
+        for offset, size in zip(offsets, cached.shape[1:])
+    )
+    region = full[(slice(None), *slices)]
+    # same crop, same values: float16 storage is the only difference
+    np.testing.assert_allclose(cached, region, rtol=2e-3, atol=5e-3)
+    assert np.array_equal(cached_mask, full_mask[slices])
+    # the ET mask is a subset of the brain (which is exactly the non-zero region)
+    brain = cached[0] != 0
+    assert np.all(cached_mask.astype(bool) <= brain)
+    # placing the cached volume back reproduces the full volume (air is exactly 0)
+    from melba.data.brats import place_on_full_grid
+
+    restored = place_on_full_grid(cached, offsets=offsets, original_shape=full.shape[1:])
+    np.testing.assert_allclose(restored, full, rtol=2e-3, atol=5e-3)
+    assert np.all(restored[:, : offsets[0]] == 0.0)
+
+
+def test_predictions_placed_back_give_identical_metrics(tmp_path: Path, brats_root: Path) -> None:
+    """Cropped-grid metrics equal full-grid metrics once the prediction is placed back."""
+    from melba.data.brats import load_case_for_pipeline, place_on_full_grid
+    from melba.metrics import MetricSettings, compute_case_metrics
+
+    item, cache_dir, _entry = _cache_case(tmp_path, brats_root)
+    cached, mask, spacing, meta = load_case_for_pipeline(
+        item, use_cache=True, cache_dir=cache_dir
+    )
+    full, full_mask, full_spacing, full_meta = load_case_for_pipeline(item, use_cache=False)
+    offsets = tuple(int(value) for value in meta["offsets"])
+
+    # a deliberately imperfect prediction: the reference mask, eroded by one voxel
+    eroded = (mask[1:-1, 1:-1, 1:-1]).copy()
+    eroded[eroded > 0] = 1.0
+    prediction = np.zeros_like(mask)
+    prediction[1:-1, 1:-1, 1:-1] = eroded
+
+    settings = MetricSettings(names=("dice", "hd95", "assd", "boundary_f1"))
+    cropped_metrics = compute_case_metrics(
+        prediction, mask, spacing=spacing, settings=settings
+    )
+    prediction_full = place_on_full_grid(
+        prediction[None], offsets=offsets, original_shape=full.shape[1:]
+    )[0]
+    target_full = place_on_full_grid(
+        full_mask[None], offsets=offsets, original_shape=full.shape[1:]
+    )[0]
+    assert np.array_equal(target_full, full_mask)  # padding restores the reference exactly
+    full_metrics = compute_case_metrics(
+        prediction_full, target_full, spacing=full_spacing, settings=settings
+    )
+    for name in ("dice", "hd95", "assd", "boundary_f1"):
+        left, right = cropped_metrics[name], full_metrics[name]
+        if left != left:  # NaN == NaN for a degenerate pair
+            assert right != right
+        else:
+            assert left == pytest.approx(right, rel=1e-6, abs=1e-9), name
 

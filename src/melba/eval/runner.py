@@ -308,6 +308,30 @@ def run_evaluation(
             f"available: {sorted(method.name for method in methods)}"
         )
     save_variance = bool(config.get("evaluation.save_variance_maps", False))
+    # Optional cap on how many cases keep their probability maps (figures only): a fixed,
+    # seeded subset of the evaluated cases, so a re-run selects exactly the same ones.
+    map_case_limit = config.get("evaluation.probability_map_cases")
+    map_case_seed = int(config.get("evaluation.probability_map_case_seed", 0))
+    map_case_ids: set[str] | None = None
+    if map_case_limit is not None:
+        limit = int(map_case_limit)
+        case_ids: list[str] = []
+        if limit < len(indices):
+            items = getattr(dataset, "items", None)
+            if items is not None:
+                # ask the dataset item for its id instead of loading the volume
+                case_ids = [str(items[index].case_id) for index in indices]
+            else:  # pragma: no cover - a dataset without item descriptors
+                case_ids = [str(dataset[index]["case_id"]) for index in indices]
+        if case_ids:
+            import numpy as _np
+
+            chosen = _np.sort(
+                _np.random.default_rng(map_case_seed).choice(
+                    len(case_ids), size=max(0, limit), replace=False
+                )
+            )
+            map_case_ids = {case_ids[int(position)] for position in chosen}
     map_setting = config.get("evaluation.probability_map_dir")
     map_base = config.resolve(map_setting) if map_setting else (output_path / "maps")
     # One sub-directory per run so the ensemble can pick up every fold/seed.
@@ -450,7 +474,8 @@ def run_evaluation(
                     writer.write({**provenance, "metric": metric_name, "value": value})
                 rows_written += len(values)
 
-                if save_maps and method.name in map_methods:
+                keep_maps = map_case_ids is None or case_id in map_case_ids
+                if save_maps and method.name in map_methods and keep_maps:
                     np.save(
                         map_dir / f"{case_id}__{method.name}__mean.npy",
                         aggregated.astype(np.float16),

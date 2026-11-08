@@ -216,6 +216,8 @@ def build_dataset(
             foreground_crop_p=float(section.get("foreground_crop_p", 0.9)),
             seed=int(config.require("seed")),
             fold=resolved_fold,
+            use_cache=bool(section.get("use_cache", False)),
+            cache_dir=config.resolve(str(section.get("cache_dir", "cache/brats2021_pre"))),
         )
     raise ConfigError(
         f"Unknown dataset '{name}'. Implemented datasets: cvc_clinicdb, brats2021."

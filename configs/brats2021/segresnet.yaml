@@ -25,6 +25,12 @@ dataset:
   target: et                      # label 4 binarised; `whole_tumour` uses labels > 0
   patch_size: [128, 128, 128]     # training crops
   foreground_crop_p: 0.9          # 90 % of the crops are centred on tumour voxels
+  # Preprocessed cache (scripts/preprocess_brats.py): brain-cropped, float16, normalized
+  # volumes plus the crop offsets, so reading a case costs a .npy load instead of four
+  # NIfTI reads + percentile normalization.  Falls back to the NIfTI files when a case is
+  # not in the cache.
+  use_cache: true
+  cache_dir: cache/brats2021_pre
   in_channels: 4                  # flair, t1, t1ce, t2 (fixed order)
   num_classes: 1
 
