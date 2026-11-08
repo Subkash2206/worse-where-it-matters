@@ -50,6 +50,7 @@ from .normalization import (
     load_dataset_statistics,
 )
 from .statistics import compute_fold_statistics, read_statistics, write_statistics
+from .sampling import FixedSubsetSampler, SeededEpochSampler
 from .splits import (
     SPLITS,
     SplitError,
@@ -87,6 +88,8 @@ __all__ = [
     "AugmentationConfig",
     "CVCDataset",
     "CVCItem",
+    "FixedSubsetSampler",
+    "SeededEpochSampler",
     "SplitError",
     "SplitRecord",
     "actual_fractions",
@@ -224,16 +227,22 @@ def build_dataloader(
     config: Config,
     *,
     shuffle: bool = False,
+    sampler: Any | None = None,
 ) -> DataLoader:
-    """DataLoader with the project's determinism defaults."""
+    """DataLoader with the project's determinism defaults.
+
+    ``sampler`` overrides ``shuffle`` (e.g. :class:`melba.data.sampling.SeededEpochSampler`
+    to cap an epoch at a fixed number of random patches).
+    """
     num_workers = int(config.get("runtime.num_workers", 0))
     seed = int(config.require("seed"))
     generator = torch.Generator()
     generator.manual_seed(seed)
     return DataLoader(
         dataset,
-        batch_size=int(config.get("training.batch_size", 1)) if shuffle else 1,
-        shuffle=shuffle,
+        batch_size=int(config.get("training.batch_size", 1)) if (shuffle or sampler) else 1,
+        shuffle=shuffle if sampler is None else False,
+        sampler=sampler,
         num_workers=num_workers,
         pin_memory=bool(config.get("runtime.pin_memory", True)) and torch.cuda.is_available(),
         worker_init_fn=make_worker_init_fn(seed, deterministic=bool(config.get("deterministic", True))),

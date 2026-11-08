@@ -26,9 +26,15 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.utils.data import Subset
 
 from melba.config import Config, ConfigError
-from melba.data import build_dataloader, build_dataset
+from melba.data import (
+    FixedSubsetSampler,
+    SeededEpochSampler,
+    build_dataloader,
+    build_dataset,
+)
 from melba.inference.sliding import build_sliding_window, sliding_window_predict
 from melba.models import build_model
 from melba.utils import amp_is_enabled, describe_device, get_device, seed_everything
@@ -251,7 +257,26 @@ def train(
 
     train_dataset = build_dataset(config, "train", train=True, fold=fold)
     val_dataset = build_dataset(config, "val", train=False, fold=fold)
-    train_loader = build_dataloader(train_dataset, config, shuffle=True)
+    seed_value = int(config.require("seed"))
+    # A 3D epoch that visits all 750 training volumes costs ~10 min of GPU time, so a
+    # protocol can cap the patches per epoch with a seeded, epoch-aware sampler.
+    max_patches = config.get("training.max_patches_per_epoch")
+    sampler = None
+    if max_patches:
+        sampler = SeededEpochSampler(
+            len(train_dataset), int(max_patches), seed=seed_value
+        )
+    train_loader = build_dataloader(
+        train_dataset, config, shuffle=sampler is None, sampler=sampler
+    )
+    # Validating 250 volumes every epoch is as expensive as training; a fixed seeded
+    # subsample keeps the epoch time bounded (the final test evaluation is untouched).
+    val_limit = config.get("training.val_limit")
+    if val_limit and int(val_limit) < len(val_dataset):
+        val_indices = FixedSubsetSampler(
+            len(val_dataset), int(val_limit), seed=int(config.get("training.val_seed", 0))
+        ).indices
+        val_dataset = Subset(val_dataset, list(val_indices))
     val_loader = build_dataloader(val_dataset, config, shuffle=False)
 
     run_dir = run_dir_for(config, fold, seed)
@@ -326,6 +351,8 @@ def train(
     for epoch in iterator:
         if hasattr(train_dataset, "set_epoch"):
             train_dataset.set_epoch(epoch)
+        if sampler is not None:
+            sampler.set_epoch(epoch)
         epoch_started = time.perf_counter()
         train_loss = train_one_epoch(
             model, train_loader, optimizer, loss_function, scaler, device, use_amp

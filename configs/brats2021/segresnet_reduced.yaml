@@ -1,0 +1,41 @@
+# -----------------------------------------------------------------------------
+# BraTS 2021, *reduced* protocol: 5 folds x 1 seed, affordable on a 6 GB GPU.
+#
+#   python scripts/run_grid.py --config configs/brats2021/segresnet_reduced.yaml \
+#       --folds 0 1 2 3 4 --seeds 0 --epochs 100 --patience 20 \
+#       --pid-file logs/cvc_brats_reduced_grid.pid
+#
+# What is reduced relative to segresnet.yaml, and why (measured in the dry run):
+#   * 100 epochs max with early stopping patience 20 on val Dice (300/50 before);
+#   * at most 250 random patches per epoch (a full 750-patch epoch would cost ~10 min of
+#     GPU time, the cap is what makes an epoch ~3-4 min); the sampler is seeded per
+#     (run seed, epoch), so the sequence of patches is reproducible and resumable;
+#   * the per-epoch validation runs on a fixed seeded subsample of 40 val cases instead of
+#     all 250 (the *final* test evaluation still covers the whole test fold);
+#   * one seed instead of three.
+# Everything else — 128^3 patches, batch 1, AMP, sliding-window test inference, the 1/2/4/8
+# 3D TTA sets — is identical to segresnet.yaml.
+# -----------------------------------------------------------------------------
+defaults:
+  - segresnet.yaml
+
+experiment:
+  name: brats2021_segresnet_reduced
+  description: "BraTS 2021 ET, 3D SegResNet, reduced protocol (5 folds x 1 seed)"
+
+training:
+  epochs: 100
+  early_stopping_patience: 20
+  max_patches_per_epoch: 250   # random cases, seeded per (seed, epoch)
+  val_limit: 40                # fixed seeded subsample of the val fold, every epoch
+  val_seed: 0
+
+# test-time augmentation on the whole test fold (sliding window inference)
+evaluation:
+  split: test
+  output_dir: results/${experiment.name}/evaluation
+  write_summary: true
+  # float16 mean probability maps, only for the two methods the aggregate needs
+  save_probability_maps: true
+  probability_map_methods: [baseline, tta4]
+  save_variance_maps: false

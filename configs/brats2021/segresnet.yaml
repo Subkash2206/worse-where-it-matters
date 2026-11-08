@@ -19,8 +19,9 @@ experiment:
 
 dataset:
   name: brats2021
-  # one BraTS2021_* directory per patient below this path
-  root: brats2021
+  # The real BraTS 2021 training directory: 1251 BraTS2021_* folders, one per patient,
+  # read-only (nothing in the pipeline ever writes below this path).
+  root: C:/Users/subka/Documents/tta_boundary_study/brats2021
   target: et                      # label 4 binarised; `whole_tumour` uses labels > 0
   patch_size: [128, 128, 128]     # training crops
   foreground_crop_p: 0.9          # 90 % of the crops are centred on tumour voxels

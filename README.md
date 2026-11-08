@@ -394,6 +394,62 @@ dropout                               0/15       0  -                           
 `brats` is listed with `config missing` until the 3D milestone gets a config, so an
 experiment can never silently disappear from the report.
 
+## BraTS 2021 (3D, enhancing tumour)
+
+`configs/brats2021/segresnet.yaml` points `dataset.root` at the real BraTS 2021 training
+directory (`C:/Users/subka/Documents/tta_boundary_study/brats2021`, **read-only**: nothing
+in the pipeline writes below it) and `configs/brats2021/segresnet_reduced.yaml` overrides
+only the training budget.
+
+```bash
+python scripts/validate_brats.py --config configs/brats2021/segresnet.yaml   # data audit
+python scripts/make_brats_splits.py --config configs/brats2021/segresnet.yaml  # fold CSVs
+python scripts/make_brats_splits.py --config ... --force    # regenerate the CSVs
+```
+
+`scripts/validate_brats.py` is a read-only audit: 1251 cases, every one with
+flair/t1/t1ce/t2/seg, one shape `240x240x155`, one spacing `1.0x1.0x1.0 mm` (from the
+affine), labels `{0, 1, 2, 4}` only, **no bad or missing case**, and **33 cases without
+enhancing tumour** (listed in `data/splits/brats2021_validation.json` together with the
+label voxel counts). Those 33 are kept: an empty reference makes Dice undefined for that
+case, so the aggregate reports it instead of dropping the patient silently.
+
+`scripts/make_brats_splits.py` writes the case-level folds (`data/splits/brats2021_fold*.csv`,
+committed) with test = fold *k*, validation = fold *k+1* (rotating), train = the rest, split
+seed 2024 — fold 0: 750 train / 250 val / 251 test, fold 4: 754/251/250, each fold holding
+250-251 patients. `data/splits/brats2021_empty_et.json` lists the empty-ET patients **per
+fold** (e.g. fold 0: 8 in test, 4 in val).
+
+Pipeline: 4 modalities in fixed order, per-modality 1-99 percentile clip + z-score over
+brain voxels (background exactly 0), ET = label 4, distances in mm from the affine,
+foreground-aware 128^3 training crops, MONAI sliding-window inference (128^3, overlap 0.5,
+gaussian) for validation and test, `segresnet_3d` (SegResNet, `init_filters` 16, from
+scratch), batch 1, AMP, and 1/2/4/8-view 3D TTA sets of the axial dihedral group times a
+depth flip.
+
+Measured on the real data (fold 0, RTX 4050 6 GB, AMP, 40 patches/epoch, 40 val volumes):
+
+| measurement | value |
+|---|---|
+| peak VRAM | **2663 MiB allocated / 3212 MiB reserved** of 6 GB |
+| training | **1.53 s per 128^3 patch** (includes reading + normalizing a 240^3 volume) |
+| validation | **2.23 s per volume** (18 sliding windows of 128^3) |
+| epoch | 152.9 s (median over two epochs) |
+
+The reduced protocol (`segresnet_reduced.yaml`: 5 folds x 1 seed, 100 epochs max, patience
+20 on val Dice, **250 random patches per epoch** via `training.max_patches_per_epoch`,
+validation on a fixed seeded **40-case** subsample via `training.val_limit`, test on the
+whole test fold with all four TTA methods, float16 mean maps for `baseline` and `tta4`)
+therefore costs ~7.9 min per epoch, i.e. **~6.5 h of training for 50 epochs plus ~2.3 h of
+test-time TTA evaluation per run, ~44 h for the five folds** (~31 h if early stopping lands
+near 30 epochs, ~77 h if every fold runs the full 100). The grid has **not** been launched:
+
+```bash
+python scripts/run_grid.py --config configs/brats2021/segresnet_reduced.yaml \
+    --folds 0 1 2 3 4 --seeds 0 --epochs 100 --patience 20 \
+    --pid-file logs/cvc_brats_reduced_grid.pid
+```
+
 ## Metric definitions
 
 Computed per case, on the **native image grid** (predictions are resampled back to
