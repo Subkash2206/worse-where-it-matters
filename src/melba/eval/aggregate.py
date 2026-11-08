@@ -8,6 +8,12 @@ cross-validation grid (5 folds x 3 seeds) instead:
   seeds averaged per case first (``paired_by_seed`` / ``paired_seed_averaged``);
 * missed-detection rates, transition tables and exact McNemar tests, pooled over
   folds, for both of the above;
+* the **mirrored failure mode** - false positives on *empty references* (BraTS: patients
+  without enhancing tumour), with the same rate/CI/McNemar machinery and the predicted
+  volume of those false positives;
+* a **challenge-style sensitivity table**: Dice re-scored the way a BraTS leaderboard
+  does (two empty masks = 1, foreground on an empty reference = 0), next to the strict
+  protocol mean, so our numbers can be compared with published ones;
 * a **seed ensemble**: the mean probability map of the 3 seeds (``ensemble3``) and of
   the 3 seeds x 4 views (``ensemble3_tta4``), thresholded at 0.5 and evaluated with
   exactly the same metric code as the individual runs;
@@ -31,10 +37,18 @@ import pandas as pd
 
 from melba.config import Config
 from melba.eval.records import read_long_csv
-from melba.metrics import MetricSettings, compute_case_metrics, grid_diagonal_mm
-from melba.stats import analyze_detection, analyze_long, pool_folds
+from melba.metrics import (
+    VOLUME_METRICS,
+    MetricSettings,
+    compute_case_metrics,
+    grid_diagonal_mm,
+)
+from melba.stats import analyze_detection, analyze_false_positives, analyze_long, pool_folds
+
+from .report import cluster_bootstrap_change
 
 __all__ = [
+    "CHALLENGE_METRIC",
     "ENSEMBLES",
     "ENSEMBLE_VIEWS",
     "NON_QUALITY_METRICS",
@@ -42,10 +56,13 @@ __all__ = [
     "AggregateResult",
     "RunFiles",
     "aggregate_all",
+    "challenge_scoring_table",
+    "challenge_style_dice",
     "compare_methods",
     "detection_table",
     "discover_runs",
     "ensemble_frame",
+    "false_positive_table",
     "frames_by_seed",
     "load_ground_truth",
     "map_dir_for",
@@ -338,6 +355,153 @@ def detection_table(
     )
 
 
+def false_positive_table(
+    frame: pd.DataFrame,
+    *,
+    methods: Sequence[str],
+    control: str = "baseline",
+    n_bootstrap: int = 10000,
+    ci: float = 0.95,
+    seed: int = 0,
+    correction: str = "holm",
+) -> pd.DataFrame:
+    """False positives on **empty references**, pooled over folds.
+
+    The companion of :func:`detection_table` with the mirrored direction.  The denominator
+    is the number of cases whose reference mask is empty, so for BraTS ET the rate reads
+    "of the patients without enhancing tumour, how many did the method segment anyway".
+    Reported with a cluster bootstrap CI over groups (patients for 3D data), the exact
+    McNemar test against the control, and the predicted volume of those false positives
+    (``pred_volume_mm3_*``, present when the per-case volume metric was computed).
+    """
+    return analyze_false_positives(
+        pool_folds([frame]),
+        control=control,
+        methods=list(methods),
+        n_bootstrap=n_bootstrap,
+        ci=ci,
+        seed=seed,
+        correction=correction,
+    )
+
+
+#: per-case metric holding the challenge-style (empty reference counted) Dice
+CHALLENGE_METRIC = "dice_challenge"
+
+#: value a case contributes under the BraTS challenge convention
+_CHALLENGE_EMPTY_VALUES: Mapping[str, float] = {"both_empty": 1.0, "gt_empty": 0.0}
+
+
+def challenge_style_dice(
+    frame: pd.DataFrame, *, metric: str = "dice", name: str = CHALLENGE_METRIC
+) -> pd.DataFrame:
+    """Re-score ``metric`` the way the BraTS challenge does, as a new metric.
+
+    The challenge scores every case, including the ones whose reference has no foreground:
+    two empty masks are a perfect match (1.0) and a prediction that finds something where
+    the reference is empty is a total failure (0.0).  Our own protocol
+    (``metrics.score_empty_reference: false``) leaves those cases undefined instead, so
+    this frame is the sensitivity analysis that makes the numbers comparable with
+    published leaderboards.  A missed detection already scores 0 in both conventions and
+    is carried over unchanged; the input frame is not modified.
+    """
+    if "empty_flag" not in frame.columns:
+        raise ValueError(
+            "challenge_style_dice needs the 'empty_flag' column of the per-case CSV"
+        )
+    rows = frame.loc[frame["metric"] == metric].copy()
+    if rows.empty:
+        raise ValueError(f"No rows with metric {metric!r} in the frame")
+    # keep the protocol value next to the re-scored one, so paired statistics can compare
+    # the two scorings case by case without re-merging frames
+    rows["strict_value"] = rows["value"].astype(float)
+    flag = rows["empty_flag"].astype(str)
+    for empty_flag, value in _CHALLENGE_EMPTY_VALUES.items():
+        rows.loc[flag == empty_flag, "value"] = value
+    rows["metric"] = name
+    return rows
+
+
+def challenge_scoring_table(
+    frame: pd.DataFrame,
+    *,
+    by_fold: bool = False,
+    n_bootstrap: int = 10000,
+    ci: float = 0.95,
+    seed: int = 0,
+    metric: str = "dice",
+) -> pd.DataFrame:
+    """Our strict Dice next to the challenge-style Dice, per method (and fold).
+
+    ``strict_*`` is what we report (only cases whose reference has foreground are scored,
+    see ``metrics.score_empty_reference``); ``challenge_*`` scores the same predictions
+    with empty references counted as 1 or 0, i.e. the definition behind published BraTS ET
+    numbers.  ``delta_mean`` is ``challenge - strict`` with a cluster bootstrap CI over
+    groups; it is exactly 0 when the dataset has no empty references (CVC) and can take
+    either sign for BraTS: empty-ET patients contribute perfect 1.0 scores when the model
+    correctly predicts nothing and 0.0 when it false-positives, while the strict mean is
+    taken over the remaining patients only.
+    """
+    challenge = challenge_style_dice(frame, metric=metric)
+    group_columns = ["fold"] if by_fold else []
+
+    rows: list[dict[str, Any]] = []
+    for keys, group in challenge.groupby(["method", *group_columns], dropna=False):
+        keys = keys if isinstance(keys, tuple) else (keys,)
+        selection: dict[str, Any] = {"method": str(keys[0])}
+        for position, column in enumerate(group_columns, start=1):
+            selection[column] = keys[position]
+        protocol_values = group["strict_value"].to_numpy(dtype=float)
+        scored = protocol_values[np.isfinite(protocol_values)]
+        challenge_values = group["value"].to_numpy(dtype=float)
+        flags = group["empty_flag"].astype(str)
+
+        strict_mean = float(np.mean(scored)) if scored.size else float("nan")
+        challenge_mean = (
+            float(np.mean(challenge_values)) if challenge_values.size else float("nan")
+        )
+        delta_low = delta_high = float("nan")
+        if scored.size and challenge_values.size:
+            delta_low, delta_high = cluster_bootstrap_change(
+                challenge_values,
+                protocol_values,
+                group["group_id"].to_numpy(),
+                np.nanmean,
+                n_bootstrap=n_bootstrap,
+                ci=ci,
+                seed=seed,
+            )
+        rows.append(
+            {
+                **selection,
+                "n_cases": int(challenge_values.size),
+                "n_scored_strict": int(scored.size),
+                "n_empty_reference": int(flags.isin(["gt_empty", "both_empty"]).sum()),
+                "n_false_positive": int((flags == "gt_empty").sum()),
+                "n_missed": int((flags == "pred_empty").sum()),
+                "strict_dice_mean": strict_mean,
+                "strict_dice_median": float(np.median(scored))
+                if scored.size
+                else float("nan"),
+                "challenge_dice_mean": challenge_mean,
+                "challenge_dice_median": float(np.median(challenge_values))
+                if challenge_values.size
+                else float("nan"),
+                "delta_mean": challenge_mean - strict_mean
+                if scored.size and challenge_values.size
+                else float("nan"),
+                "delta_ci_low": float(delta_low),
+                "delta_ci_high": float(delta_high),
+            }
+        )
+
+    table = pd.DataFrame(rows)
+    if table.empty:
+        return table
+    return table.sort_values([*group_columns, "method"]).reset_index(drop=True)
+
+
+
 
 def load_ground_truth(
     config: Config, folds: Sequence[int], *, split: str | None = None
@@ -532,7 +696,14 @@ def aggregate_all(
             "an existing evaluation directory)"
         )
     settings = MetricSettings.from_config(config)
-    quality_metrics = tuple(metrics) if metrics is not None else tuple(settings.gt_names)
+    # Volume metrics describe a mask, they are not a quality score of the method: they stay
+    # out of the paired/mean tables (a "higher predicted volume is better" comparison is
+    # meaningless) and are reported by the empty-reference table instead.
+    quality_metrics = (
+        tuple(metrics)
+        if metrics is not None
+        else tuple(name for name in settings.gt_names if name not in VOLUME_METRICS)
+    )
     by_seed = frames_by_seed(runs)
     methods = sorted(
         {
@@ -551,6 +722,8 @@ def aggregate_all(
 
     paired_by_seed: list[pd.DataFrame] = []
     detection_by_seed: list[pd.DataFrame] = []
+    false_positive_by_seed: list[pd.DataFrame] = []
+    challenge_by_seed: list[pd.DataFrame] = []
     for seed, frames in sorted(by_seed.items()):
         pooled = pool_folds(frames)
         if pairs:
@@ -568,9 +741,10 @@ def aggregate_all(
             )
             table.insert(0, "seed", int(seed))
             paired_by_seed.append(table)
+        detect_methods = [control] + [treatment for treatment, _ in pairs]
         detection = detection_table(
             pooled,
-            methods=[control] + [treatment for treatment, _ in pairs],
+            methods=detect_methods,
             control=control,
             n_bootstrap=n_bootstrap,
             ci=ci,
@@ -579,6 +753,23 @@ def aggregate_all(
         )
         detection.insert(0, "seed", int(seed))
         detection_by_seed.append(detection)
+        # the mirrored failure mode: foreground predicted where the reference is empty
+        false_positive = false_positive_table(
+            pooled,
+            methods=detect_methods,
+            control=control,
+            n_bootstrap=n_bootstrap,
+            ci=ci,
+            seed=bootstrap_seed,
+            correction=correction,
+        )
+        false_positive.insert(0, "seed", int(seed))
+        false_positive_by_seed.append(false_positive)
+        challenge = challenge_scoring_table(
+            pooled, n_bootstrap=n_bootstrap, ci=ci, seed=bootstrap_seed
+        )
+        challenge.insert(0, "seed", int(seed))
+        challenge_by_seed.append(challenge)
 
     tables["paired_by_seed"] = (
         pd.concat(paired_by_seed, ignore_index=True) if paired_by_seed else pd.DataFrame()
@@ -586,6 +777,16 @@ def aggregate_all(
     tables["detection_by_seed"] = (
         pd.concat(detection_by_seed, ignore_index=True)
         if detection_by_seed
+        else pd.DataFrame()
+    )
+    tables["false_positive_by_seed"] = (
+        pd.concat(false_positive_by_seed, ignore_index=True)
+        if false_positive_by_seed
+        else pd.DataFrame()
+    )
+    tables["challenge_scoring_by_seed"] = (
+        pd.concat(challenge_by_seed, ignore_index=True)
+        if challenge_by_seed
         else pd.DataFrame()
     )
 
@@ -614,6 +815,26 @@ def aggregate_all(
         ci=ci,
         seed=bootstrap_seed,
         correction=correction,
+    )
+    # ---- the mirrored failure mode and the challenge-style sensitivity table ----------
+    # Same pooling as the missed-detection table, so both error directions of a method sit
+    # in one place: a method that gains Dice can buy it with false positives on the
+    # patients whose reference is empty (BraTS ET).
+    averaged_methods = [control] + [treatment for treatment, _ in pairs]
+    tables["false_positive_seed_averaged"] = false_positive_table(
+        averaged,
+        methods=averaged_methods,
+        control=control,
+        n_bootstrap=n_bootstrap,
+        ci=ci,
+        seed=bootstrap_seed,
+        correction=correction,
+    )
+    tables["challenge_scoring"] = challenge_scoring_table(
+        averaged, n_bootstrap=n_bootstrap, ci=ci, seed=bootstrap_seed
+    )
+    tables["challenge_scoring_by_fold"] = challenge_scoring_table(
+        averaged, by_fold=True, n_bootstrap=n_bootstrap, ci=ci, seed=bootstrap_seed
     )
 
 
@@ -687,6 +908,18 @@ def aggregate_all(
                 ci=ci,
                 seed=bootstrap_seed,
                 correction=correction,
+            )
+            tables["ensemble_false_positive"] = false_positive_table(
+                comparison,
+                methods=detect_methods,
+                control=control,
+                n_bootstrap=n_bootstrap,
+                ci=ci,
+                seed=bootstrap_seed,
+                correction=correction,
+            )
+            tables["ensemble_challenge_scoring"] = challenge_scoring_table(
+                comparison, n_bootstrap=n_bootstrap, ci=ci, seed=bootstrap_seed
             )
     elif ensemble:
         notes.append(

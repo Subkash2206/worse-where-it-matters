@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from .detection import (
     analyze_detection,
+    analyze_false_positives,
+    empty_reference_transition_table,
+    false_positive_rate,
     mcnemar_exact,
     missed_detection_rate,
     transition_table,
@@ -27,10 +30,13 @@ __all__ = [
     "DISTANCE_RESTRICTED_METRICS",
     "METRIC_DIRECTIONS",
     "analyze_detection",
+    "analyze_false_positives",
     "analyze_long",
     "analyze_pooled_folds",
     "analyze_sensitivity",
     "bootstrap_ci_mean",
+    "empty_reference_transition_table",
+    "false_positive_rate",
     "holm_adjust",
     "mcnemar_exact",
     "metric_direction",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .aggregate import (
+    CHALLENGE_METRIC,
     ENSEMBLES,
     ENSEMBLE_VIEWS,
     NON_QUALITY_METRICS,
@@ -11,10 +12,13 @@ from .aggregate import (
     RunFiles,
     aggregate_all,
     aggregate_output_dir,
+    challenge_scoring_table,
+    challenge_style_dice,
     compare_methods,
     detection_table,
     discover_runs,
     ensemble_frame,
+    false_positive_table,
     frames_by_seed,
     load_ground_truth,
     map_dir_for,
@@ -91,6 +95,7 @@ from .mc_dropout import (
 )
 
 __all__ = [
+    "CHALLENGE_METRIC",
     "CORE_METRICS",
     "DISTANCE_METRICS",
     "ENSEMBLES",
@@ -121,6 +126,8 @@ __all__ = [
     "auroc_difference",
     "auroc_nan_bounds",
     "build_mc_case_table",
+    "challenge_scoring_table",
+    "challenge_style_dice",
     "cluster_bootstrap_change",
     "cluster_bootstrap_correlation",
     "compare_methods",
@@ -130,6 +137,7 @@ __all__ = [
     "discover_runs",
     "ensemble_frame",
     "evaluate",
+    "false_positive_table",
     "frames_by_seed",
     "gain_difference_table",
     "load_ground_truth",

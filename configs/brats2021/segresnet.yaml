@@ -126,6 +126,9 @@ metrics:
     - hd95_pooled
     - assd
     - boundary_f1
+    # the predicted volume is what the empty-ET false-positive report summarises
+    # (`pred_volume_mm3_*` in the aggregate's false_positive tables)
+    - pred_volume_mm3
     - entropy_mean
     - variance_mean
     - entropy_mean_roi
@@ -157,3 +160,7 @@ stats:
   n_bootstrap: 10000
   bootstrap_seed: 0
   output_dir: results/${experiment.name}/stats
+  # "failure" definitions of the tail table, in this dataset's distance unit (mm for the
+  # 3D data; the CVC configs use pixels with the script defaults of 50 / 0.5)
+  tail_hd95: 10.0                  # mm: an HD95 above this is a failure
+  tail_dice: 0.5

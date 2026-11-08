@@ -10,6 +10,12 @@ Produces (under ``results/aggregate_<experiment>/`` by default):
   seeds, so each video stays one independent test unit;
 * ``detection_by_seed`` / ``detection_seed_averaged`` - missed-detection rates with
   cluster-bootstrap CIs, transition tables and exact McNemar tests, pooled over folds;
+* ``false_positive_by_seed`` / ``false_positive_seed_averaged`` - the mirrored failure
+  mode, false positives on *empty references*, with the same rate/CI/McNemar treatment
+  plus the predicted volume of those false positives (``pred_volume_mm3_*``);
+* ``challenge_scoring`` / ``challenge_scoring_by_seed`` / ``challenge_scoring_by_fold`` -
+  a sensitivity table that re-scores Dice the way a BraTS leaderboard does (two empty
+  masks = 1, foreground on an empty reference = 0) next to the strict protocol mean;
 * ``ensemble_per_case`` / ``ensemble_comparison`` / ``ensemble_detection`` - the seed
   ensemble of the baseline maps (``ensemble3``) and of the tta4 maps
   (``ensemble3_tta4``), evaluated with the same metric code as the runs and compared
@@ -133,12 +139,27 @@ def _write_summary_markdown(
     folds_found,
     seeds_found,
     audit: dict | None = None,
+    config=None,
 ) -> Path:
     """Write ``summary.md`` with the protocol sections (a)-(g)."""
     from melba.eval import write_markdown
 
     def pick(frame, *columns):
         return _subset(frame, list(columns))
+
+    dataset_name = str(config.get("dataset.name", "dataset")) if config is not None else "dataset"
+    is_3d = bool(
+        config is not None
+        and int(config.get("model.spatial_dims", config.get("dataset.spatial_dims", 2) or 2)) == 3
+    )
+    unit_word = "patient" if is_3d else "video"
+    unit_plural = "patients" if is_3d else "videos"
+    scope = (
+        f"{len(runs)} runs: folds {folds_found} x seeds {seeds_found}; config "
+        f"`{args.config}`; dataset `{dataset_name}`; pairing unit "
+        f"`{args.unit or 'group'}` (one {unit_word}); bootstrap draws "
+        f"`{args.n_bootstrap or 'config'}`; Holm correction."
+    )
 
     method_summary = extra_tables["method_summary"]
     frame_level = method_summary.loc[method_summary["level"] == "frame"]
@@ -155,6 +176,44 @@ def _write_summary_markdown(
     detection_columns = (
         "method", "n_cases", "n_missed", "missed_rate", "ci_low", "ci_high",
         "nonempty_to_empty", "empty_to_nonempty", "mcnemar_p", "mcnemar_p_adjusted",
+    )
+    false_positive_columns = (
+        "method", "n_cases", "n_false_positive", "false_positive_rate", "ci_low",
+        "ci_high", "correct_to_fp", "fp_to_correct", "mcnemar_p", "mcnemar_p_adjusted",
+        "pred_volume_mm3_mean", "pred_volume_mm3_median", "pred_volume_mm3_max",
+    )
+    challenge_columns = (
+        "method", "n_cases", "n_scored_strict", "n_empty_reference", "n_false_positive",
+        "n_missed", "strict_dice_mean", "strict_dice_median", "challenge_dice_mean",
+        "challenge_dice_median", "delta_mean", "delta_ci_low", "delta_ci_high",
+    )
+    challenge_fold_columns = (
+        "fold", "method", "n_cases", "n_empty_reference", "n_false_positive",
+        "strict_dice_mean", "challenge_dice_mean", "delta_mean",
+    )
+    false_positive_note = (
+        "The other half of the error budget: a prediction with foreground where the "
+        "reference has none. `n_cases` here is the number of **empty-reference** cases "
+        "(BraTS ET: patients without enhancing tumour), so `false_positive_rate` is the "
+        "fraction of them a method segments anyway; `correct_to_fp` counts empty-reference "
+        "cases the baseline left empty and the method filled (a new false positive), "
+        "`fp_to_correct` the opposite, and the exact McNemar p is computed on those two "
+        "discordant cells (Holm-corrected). `pred_volume_mm3_*` is the ET volume the false "
+        "positives invented, in mm^3 (mean / median / largest over the false-positive cases; "
+        "blank when the per-case volume metric was not computed)."
+    )
+    challenge_note = (
+        "Sensitivity analysis for comparability with published BraTS results, which score "
+        "**every** case: an empty reference with an empty prediction counts as Dice 1 and a "
+        "prediction that finds something on an empty reference counts as 0. `strict_*` is "
+        "our own protocol (those cases are flagged and left out of the mean, see "
+        "`metrics.score_empty_reference`), computed on `n_scored_strict` cases; "
+        "`challenge_*` is the same predictions over all `n_cases`, and `delta_mean` = "
+        "challenge - strict with a cluster bootstrap CI over groups. A positive delta means "
+        "the challenge convention flatters the method (correct empty calls scoring 1), a "
+        "negative delta means its empty-reference false positives (`n_false_positive`) cost "
+        "more than the correct empty calls gain. Delta is exactly 0 for a dataset without "
+        "empty references."
     )
     tail_columns = (
         "method", "n_cases", "hd95_p90", "hd95_p95", "hd95_failure_rate",
@@ -174,34 +233,46 @@ def _write_summary_markdown(
         "spearman_vs_one_minus_dice_p", "auroc_failure",
     )
 
-    preamble = (
-        f"{len(runs)} runs: folds {folds_found} x seeds {seeds_found}; config "
-        f"`{args.config}`; pairing unit `{args.unit or 'group'}`; bootstrap draws "
-        f"`{args.n_bootstrap or 'config'}`; Holm correction; failure thresholds "
-        "HD95 > 50 px and Dice < 0.5.\n\n"
-        "Frames of one video are not independent, so every CI and test resamples or "
-        "pairs at the video level (29 units). Distance metrics are restricted to cases "
-        "non-empty under both methods (`n_cases_used`); section (e) repeats the "
-        "comparison on all cases with empty predictions penalised by the image "
-        "diagonal. `ensemble3` averages the three seeds' baseline maps and "
-        "`ensemble3_tta4` their tta4 maps (3 x 4 views); both are a single realisation, "
-        "so their across-seed std is undefined (blank)."
-    )
+    if is_3d:
+        preamble = (
+            f"{scope}\n\n"
+            f"Cases of one {unit_word} are not independent, so every CI and test resamples "
+            f"or pairs at the {unit_word} level. The empty-reference case class of this "
+            "dataset (BraTS ET: patients without enhancing tumour) is scored "
+            "`metrics.score_empty_reference: false`: those cases carry an `empty_flag` and "
+            "are **left out** of the Dice/distance means instead of being counted as a "
+            "perfect match. Section (c) reports missed detections on non-empty references, "
+            "section (c2) the mirrored error - false positives on the empty ones - and "
+            "section (c3) re-scores the same predictions with the challenge convention "
+            "(two empty masks = Dice 1, foreground on an empty reference = 0) so the numbers "
+            "are comparable with published BraTS results."
+        )
+    else:
+        preamble = (
+            f"{scope} Failure thresholds HD95 > 50 px and Dice < 0.5.\n\n"
+            "Frames of one video are not independent, so every CI and test resamples or "
+            "pairs at the video level (29 units). Distance metrics are restricted to cases "
+            "non-empty under both methods (`n_cases_used`); section (e) repeats the "
+            "comparison on all cases with empty predictions penalised by the image "
+            "diagonal. `ensemble3` averages the three seeds' baseline maps and "
+            "`ensemble3_tta4` their tta4 maps (3 x 4 views); both are a single realisation, "
+            "so their across-seed std is undefined (blank)."
+        )
     sections = [
         (
             "(a) Per-method summary - frame level",
             pick(frame_level, *summary_columns),
-            "Mean over all frames of the fold, pooled over the 5 folds (612 cases), "
-            "then mean ± std across the three seeds.",
+            f"Mean over all cases of the fold, pooled over the {len(folds_found)} folds, "
+            "then mean ± std across the seeds.",
         ),
         (
-            "(a) Per-method summary - video level",
+            "(a) Per-method summary - patient level" if is_3d else "(a) Per-method summary - video level",
             pick(video_level, *summary_columns),
-            "Each video contributes one value (mean over its frames), 29 videos in "
-            "total; mean ± std across the three seeds.",
+            f"Each {unit_word} contributes one value (mean over its cases); mean ± std "
+            "across the seeds.",
         ),
         (
-            "(b) Paired comparisons vs baseline - video level, seeds averaged per case",
+            f"(b) Paired comparisons vs baseline - {unit_word} level, seeds averaged per case",
             pick(tables.get("paired_seed_averaged"), *paired_columns),
             "Wilcoxon signed-rank (primary), seeded percentile bootstrap CI of the mean "
             "delta, matched-pairs rank-biserial effect size, Holm across metrics. "
@@ -211,9 +282,24 @@ def _write_summary_markdown(
         (
             "(c) Missed detections pooled over folds",
             pick(tables.get("detection_seed_averaged"), *detection_columns),
-            "Cluster (video) bootstrap CI of the missed rate; `nonempty_to_empty` counts "
-            "new misses and `empty_to_nonempty` recovered cases relative to the "
+            f"Cluster ({unit_word}) bootstrap CI of the missed rate; `nonempty_to_empty` "
+            "counts new misses and `empty_to_nonempty` recovered cases relative to the "
             "baseline; exact McNemar p on the discordant pairs, Holm-corrected.",
+        ),
+        (
+            "(c2) False positives on empty references - the mirrored failure mode",
+            pick(tables.get("false_positive_seed_averaged"), *false_positive_columns),
+            false_positive_note,
+        ),
+        (
+            "(c3) Sensitivity: BraTS challenge-style scoring of the same predictions",
+            pick(tables.get("challenge_scoring"), *challenge_columns),
+            challenge_note,
+        ),
+        (
+            "(c3-per-fold) Challenge-style vs strict Dice, fold by fold",
+            pick(tables.get("challenge_scoring_by_fold"), *challenge_fold_columns),
+            "Same as (c3) per fold, so the shift cannot hide behind fold averaging.",
         ),
         (
             "(d) Tail metrics (HD95 percentiles, failure rates) and change vs baseline",
@@ -242,7 +328,7 @@ def _write_summary_markdown(
             "Fold-to-fold spread of the control method (seeds averaged).",
         ),
         (
-            "Ensemble comparisons - video level, seeds averaged per case",
+            f"Ensemble comparisons - {unit_word} level, seeds averaged per case",
             pick(tables.get("ensemble_comparison"), *paired_columns),
             "`ensemble3` and `ensemble3_tta4` against `baseline` and `tta4`.",
         ),
@@ -388,10 +474,13 @@ def _write_summary_markdown(
         )
         for note in audit.get("notes", []):
             sections.append(("Audit note", note, ""))
+    pretty_names = {"cvc_clinicdb": "CVC-ClinicDB", "brats2021": "BraTS 2021"}
+    pretty = pretty_names.get(dataset_name, dataset_name)
+    title = f"MELBA {pretty} - {len(folds_found)}-fold x {len(seeds_found)}-seed TTA results"
     return Path(
         write_markdown(
             str(Path(output_dir) / "summary.md"),
-            title="MELBA CVC-ClinicDB - 5-fold x 3-seed TTA results",
+            title=title,
             preamble=preamble,
             sections=sections,
         )
@@ -502,6 +591,56 @@ def main(argv: list[str] | None = None) -> int:
         ],
     )
     _print_table(
+        "false positives on EMPTY references, pooled over folds (seeds averaged per case)",
+        tables.get("false_positive_seed_averaged"),
+        columns=[
+            "method",
+            "n_cases",
+            "n_false_positive",
+            "false_positive_rate",
+            "ci_low",
+            "ci_high",
+            "correct_to_fp",
+            "fp_to_correct",
+            "mcnemar_p",
+            "mcnemar_p_adjusted",
+            "pred_volume_mm3_mean",
+            "pred_volume_mm3_median",
+            "pred_volume_mm3_max",
+        ],
+    )
+    _print_table(
+        "sensitivity: strict Dice vs BraTS challenge-style Dice (empty reference counted)",
+        tables.get("challenge_scoring"),
+        columns=[
+            "method",
+            "n_cases",
+            "n_scored_strict",
+            "n_empty_reference",
+            "n_false_positive",
+            "n_missed",
+            "strict_dice_mean",
+            "challenge_dice_mean",
+            "delta_mean",
+            "delta_ci_low",
+            "delta_ci_high",
+        ],
+    )
+    _print_table(
+        "sensitivity per fold: strict vs challenge-style Dice",
+        tables.get("challenge_scoring_by_fold"),
+        columns=[
+            "fold",
+            "method",
+            "n_cases",
+            "n_empty_reference",
+            "n_false_positive",
+            "strict_dice_mean",
+            "challenge_dice_mean",
+            "delta_mean",
+        ],
+    )
+    _print_table(
         "seed ensemble vs baseline / tta4",
         tables.get("ensemble_comparison"),
         columns=[
@@ -553,7 +692,10 @@ def main(argv: list[str] | None = None) -> int:
         "tail_metrics": tail_table(
             combined,
             control=args.control,
-            thresholds=TailThresholds(),
+            thresholds=TailThresholds(
+                hd95_px=float(stats.get("tail_hd95", TailThresholds().hd95_px)),
+                dice=float(stats.get("tail_dice", TailThresholds().dice)),
+            ),
             n_bootstrap=n_bootstrap,
             ci=ci,
             seed=bootstrap_seed,
@@ -718,6 +860,7 @@ def main(argv: list[str] | None = None) -> int:
         folds_found=folds_found,
         seeds_found=seeds_found,
         audit=audit,
+        config=config,
     )
 
     print(f"\ngit revision: {git_revision()}")

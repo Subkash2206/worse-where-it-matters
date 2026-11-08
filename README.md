@@ -534,6 +534,23 @@ blending borders, because the window grid depends on the array extent; set
 `dataset.use_cache: false` for a final evaluation if a bit-identical uncached run is
 required.)
 
+### Reporting the empty-reference failures (aggregate step)
+
+`python scripts/aggregate.py --config configs/brats2021/segresnet_reduced.yaml --seeds 0`
+writes, next to the usual pooled/paired tables, two tables that exist because of the
+empty-ET cases (`results/aggregate_<experiment>/`):
+
+| table | content |
+|---|---|
+| `false_positive_by_seed`, `false_positive_seed_averaged`, `ensemble_false_positive` | the **mirror image of `detection_*`**: for every method, how many patients *without* enhancing tumour it segments anyway (`n_false_positive` / `false_positive_rate`, cluster-bootstrap CI over patients), the exact McNemar test against the baseline on the discordant empty-reference cases (`correct_to_fp`, `fp_to_correct`, `mcnemar_p`, Holm-corrected), and the invented volume in mm³ (`pred_volume_mm3_mean` / `_median` / `_max` / `_total`, from the per-case `pred_volume_mm3` metric) |
+| `challenge_scoring`, `challenge_scoring_by_seed`, `challenge_scoring_by_fold`, `ensemble_challenge_scoring` | a **sensitivity table with BraTS challenge-style scoring** so our numbers can be compared with published leaderboards: two empty masks count as Dice 1, foreground on an empty reference counts as 0 (a missed detection already scores 0 in both conventions). Reported per method as `strict_dice_mean` (our protocol, empty references excluded) vs `challenge_dice_mean` (all cases), with `delta_mean = challenge - strict` and its patient-cluster bootstrap CI |
+
+`delta_mean` shows in one number what the protocol choice is worth: a positive delta means
+the challenge convention flatters the method (correct empty calls scoring 1), a negative
+delta means its empty-reference false positives cost more than those perfect scores gain.
+For a dataset without empty references (CVC) the delta is exactly 0 and the
+`false_positive_*` tables report `n_cases = 0`.
+
 ## Input normalization
 
 Images are loaded into `[0, 1]` and then normalized with the encoder's own
