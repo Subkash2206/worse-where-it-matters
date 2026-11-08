@@ -32,6 +32,7 @@ from melba.inference import (
     methods_from_config,
     predict_per_view,
 )
+from melba.inference.sliding import build_sliding_window
 from melba.metrics import (
     MetricSettings,
     compute_case_metrics,
@@ -274,6 +275,7 @@ def run_evaluation(
     threshold = 0.5 if threshold_value is None else float(threshold_value)
     activation = str(config.get("inference.activation", "sigmoid"))
     amp = bool(config.get("inference.amp", True))
+    sliding_window = build_sliding_window(config)
     dataset_name = str(config.get("dataset.name", "dataset"))
     architecture = str(config.get("model.architecture", "model"))
     run_id = make_run_id(config)
@@ -346,13 +348,25 @@ def run_evaluation(
                 if timing_enabled:
                     for _ in range(warmup_runs):
                         predict_per_view(
-                            model, image, device, method, activation=activation, amp=amp
+                            model,
+                            image,
+                            device,
+                            method,
+                            activation=activation,
+                            amp=amp,
+                            sliding_window=sliding_window,
                         )
                     _synchronize(device)
                     _reset_peak_memory(device)
                     started = time.perf_counter()
                 view_probabilities = predict_per_view(
-                    model, image, device, method, activation=activation, amp=amp
+                    model,
+                    image,
+                    device,
+                    method,
+                    activation=activation,
+                    amp=amp,
+                    sliding_window=sliding_window,
                 )
                 if timing_enabled:
                     _synchronize(device)

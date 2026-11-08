@@ -77,7 +77,7 @@ EXPERIMENTS: tuple[ExperimentSpec, ...] = (
     ExperimentSpec(
         "data050", "configs/cvc_clinicdb/unet_resnet50_data050.yaml", seeds=(0,)
     ),
-    ExperimentSpec("brats", "configs/brats/unet_brats.yaml", seeds=(0,)),
+    ExperimentSpec("brats", "configs/brats2021/segresnet.yaml", seeds=(0,)),
 )
 
 #: seconds assumed for a CPU post-processing step (aggregate / compare) in the queue ETA

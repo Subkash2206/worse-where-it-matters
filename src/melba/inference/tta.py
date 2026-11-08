@@ -20,6 +20,8 @@ from melba.models.dropout import disable_mc_dropout, enable_mc_dropout
 from melba.transforms import GeometricView, build_views, method_specs_from_config
 from melba.utils.device import amp_is_enabled
 
+from .sliding import build_sliding_window, sliding_window_predict
+
 __all__ = [
     "AGGREGATORS",
     "DEFAULT_MC_SAMPLES",
@@ -162,6 +164,7 @@ def predict_per_view(
     *,
     activation: str = "sigmoid",
     amp: bool = True,
+    sliding_window: dict[str, Any] | None = None,
 ) -> np.ndarray:
     """Return the *individual* view probabilities of a TTA method.
 
@@ -179,6 +182,10 @@ def predict_per_view(
         ``sigmoid`` (binary), ``softmax`` (multi-class) or ``none``.
     amp:
         Use CUDA automatic mixed precision when available.
+    sliding_window:
+        ``{"roi": (128, 128, 128), "overlap": 0.5, ...}`` to run the network window by
+        window over a volume that does not fit in memory (see
+        :mod:`melba.inference.sliding`); ``None`` runs one forward pass per view.
 
     Returns
     -------
@@ -208,8 +215,15 @@ def predict_per_view(
         with torch.inference_mode():
             for view in method.views:
                 transformed = view.apply(image).to(device, non_blocking=True)
-                with torch.autocast(device_type=device.type, enabled=use_amp):
-                    logits = model(transformed)
+                if sliding_window is None:
+                    with torch.autocast(device_type=device.type, enabled=use_amp):
+                        logits = model(transformed)
+                else:
+                    # 3D volumes do not fit in memory as one pass: the inferer runs the
+                    # network window by window and stitches the logits back together
+                    logits = sliding_window_predict(
+                        model, transformed, device, amp=amp, **sliding_window
+                    )
                 if logits.ndim != transformed.ndim or logits.shape[0] != transformed.shape[0] or tuple(
                     logits.shape[2:]
                 ) != tuple(transformed.shape[2:]):

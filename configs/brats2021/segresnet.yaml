@@ -1,0 +1,148 @@
+# -----------------------------------------------------------------------------
+# BraTS 2021, enhancing tumour (label 4), 3D SegResNet from scratch.
+#
+#   python scripts/make_brats_splits.py --config configs/brats2021/segresnet.yaml
+#   python scripts/train.py --config configs/brats2021/segresnet.yaml --fold 0 --seed 0
+#   python scripts/evaluate.py --config configs/brats2021/segresnet.yaml --fold 0
+#
+# 5-fold case-level CV: every patient is a test unit once, the validation split of fold k
+# is fold k+1 (rotating), fixed split seed.  Input is a 128^3 foreground-aware crop while
+# training and MONAI sliding-window inference (128^3, 50 % overlap) at evaluation, because
+# a 240x240x155 volume does not fit in 6 GB of VRAM as a single forward pass.
+# -----------------------------------------------------------------------------
+defaults:
+  - ../base.yaml
+
+experiment:
+  name: brats2021_segresnet
+  description: "BraTS 2021 ET segmentation, 3D SegResNet, geometry-aware TTA"
+
+dataset:
+  name: brats2021
+  # one BraTS2021_* directory per patient below this path
+  root: brats2021
+  target: et                      # label 4 binarised; `whole_tumour` uses labels > 0
+  patch_size: [128, 128, 128]     # training crops
+  foreground_crop_p: 0.9          # 90 % of the crops are centred on tumour voxels
+  in_channels: 4                  # flair, t1, t1ce, t2 (fixed order)
+  num_classes: 1
+
+  # 1-99 percentile clip + z-score, computed over brain voxels only, per modality
+  normalization:
+    kind: percentile
+    low: 1.0
+    high: 99.0
+
+  augmentation:
+    group: geometric_3d           # flips along all three axes + 90 deg in the axial plane
+    flip_p: 0.5
+    rot90_p: 0.5
+    intensity: 0.1
+
+  split:
+    n_folds: 5
+    fold: 0
+    seed: 2024                    # fixed: the folds never move between runs
+    output_pattern: data/splits/brats2021_fold{fold}.csv
+
+model:
+  architecture: segresnet_3d
+  spatial_dims: 3
+  init_filters: 16
+  in_channels: 4
+  num_classes: 1
+  dropout_p: 0.0
+  checkpoint: checkpoints/${experiment.name}/fold{fold}_seed{seed}/best.pt
+  selection_split: val
+
+training:
+  epochs: 300
+  batch_size: 1                   # one 128^3 patch at a time
+  learning_rate: 1.0e-4
+  monitor: val_dice
+  train_aug: geometric_3d
+  early_stopping_patience: 50
+  amp: true                       # mixed precision: the only way 128^3 fits in 6 GB
+
+inference:
+  amp: true
+  # whole-volume evaluation: MONAI sliding window, 50 % overlap
+  sliding_window:
+    roi: [128, 128, 128]
+    overlap: 0.5
+    mode: gaussian
+    sw_batch_size: 1
+
+# Geometric TTA view subsets of the dihedral group of the axial plane times a depth flip:
+#   1 view : {I}
+#   2 views: {I, F_w}
+#   4 views: {I, R180, F_h, F_w}                        (Klein four-subgroup, axial plane)
+#   8 views: the four above plus the same four with a depth flip F_d
+tta:
+  aggregator: mean
+  methods:
+    - name: baseline
+      views:
+        - { name: identity, ops: [] }
+
+    - name: tta2
+      views:
+        - { name: identity, ops: [] }
+        - { name: wflip, ops: [{ type: flip, axes: [w] }] }
+
+    - name: tta4
+      views:
+        - { name: identity, ops: [] }
+        - { name: rot180, ops: [{ type: rot90, k: 2, axes: [h, w] }] }
+        - { name: hflip, ops: [{ type: flip, axes: [h] }] }
+        - { name: wflip, ops: [{ type: flip, axes: [w] }] }
+
+    - name: tta8
+      views:
+        - { name: identity, ops: [] }
+        - { name: rot180, ops: [{ type: rot90, k: 2, axes: [h, w] }] }
+        - { name: hflip, ops: [{ type: flip, axes: [h] }] }
+        - { name: wflip, ops: [{ type: flip, axes: [w] }] }
+        - { name: dflip, ops: [{ type: flip, axes: [d] }] }
+        - { name: dflip_rot180, ops: [{ type: flip, axes: [d] }, { type: rot90, k: 2, axes: [h, w] }] }
+        - { name: dflip_hflip, ops: [{ type: flip, axes: [d] }, { type: flip, axes: [h] }] }
+        - { name: dflip_wflip, ops: [{ type: flip, axes: [d] }, { type: flip, axes: [w] }] }
+
+metrics:
+  names:
+    - dice
+    - jaccard
+    - precision
+    - recall
+    - hd
+    - hd95
+    - hd95_pooled
+    - assd
+    - boundary_f1
+    - entropy_mean
+    - variance_mean
+    - entropy_mean_roi
+    - variance_mean_roi
+    - view_disagreement
+    - per_view_dice_mean
+    - per_view_dice_std
+    - view_pairwise_dice
+  hd_percentile: 95.0
+  connectivity: 1                  # 6-neighbourhood
+  boundary_tolerance_mm: 2.0
+  empty_policy: nan
+
+evaluation:
+  split: test
+  output_dir: results/${experiment.name}/evaluation
+  write_summary: true
+  save_probability_maps: true
+  probability_map_methods: [baseline]
+
+stats:
+  unit: group                      # one patient = one test unit
+  primary_test: wilcoxon
+  correction: holm
+  n_bootstrap: 10000
+  bootstrap_seed: 0
+  output_dir: results/${experiment.name}/stats

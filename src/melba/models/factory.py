@@ -25,7 +25,12 @@ __all__ = [
     "load_checkpoint",
 ]
 
-MODEL_ARCHITECTURES: tuple[str, ...] = ("smp_unet", "monai_segresnet", "monai_swinunetr")
+MODEL_ARCHITECTURES: tuple[str, ...] = (
+    "smp_unet",
+    "monai_segresnet",
+    "segresnet_3d",
+    "monai_swinunetr",
+)
 
 
 def _attach_encoder_dropout(model: nn.Module, dropout_p: float) -> None:
@@ -94,9 +99,11 @@ def build_model(config: Config) -> nn.Module:
             attach_decoder_dropout(model, decoder_dropout_p)
         return model
 
-    if architecture == "monai_segresnet":
+    if architecture == "monai_segresnet" or architecture == "segresnet_3d":
         from monai.networks.nets import SegResNet
 
+        # SegResNet from scratch (no MONAI pretrained weights): init_filters 16 is the
+        # BraTS recipe, and spatial_dims 3 makes it a 3D network over the four modalities.
         spatial_dims = int(config.get("model.spatial_dims", 3))
         return SegResNet(
             spatial_dims=spatial_dims,

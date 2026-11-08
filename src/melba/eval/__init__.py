@@ -82,6 +82,13 @@ from .compare import (
     tail_table_for_models,
 )
 from .runner import EvaluationResult, evaluate, run_evaluation
+from .mc_dropout import (
+    MC_DESCRIPTORS,
+    build_mc_case_table,
+    mc_dropout_audit,
+    mc_dropout_deltas,
+    mc_dropout_method_table,
+)
 
 __all__ = [
     "CORE_METRICS",
@@ -90,6 +97,7 @@ __all__ = [
     "ENSEMBLE_VIEWS",
     "EXTRA_COMPARISONS",
     "LOG_RATIO_GAIN_METRICS",
+    "MC_DESCRIPTORS",
     "METRIC_LABELS",
     "NON_QUALITY_METRICS",
     "PENALIZED_SOURCE_METRICS",
@@ -112,6 +120,7 @@ __all__ = [
     "auroc_ci",
     "auroc_difference",
     "auroc_nan_bounds",
+    "build_mc_case_table",
     "cluster_bootstrap_change",
     "cluster_bootstrap_correlation",
     "compare_methods",
@@ -130,6 +139,9 @@ __all__ = [
     "map_dir_for",
     "map_statistics",
     "markdown_table",
+    "mc_dropout_audit",
+    "mc_dropout_deltas",
+    "mc_dropout_method_table",
     "method_table",
     "missed_detection_table",
     "paired_swap_null",

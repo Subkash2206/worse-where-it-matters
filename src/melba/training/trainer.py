@@ -29,6 +29,7 @@ import torch.nn as nn
 
 from melba.config import Config, ConfigError
 from melba.data import build_dataloader, build_dataset
+from melba.inference.sliding import build_sliding_window, sliding_window_predict
 from melba.models import build_model
 from melba.utils import amp_is_enabled, describe_device, get_device, seed_everything
 
@@ -192,7 +193,14 @@ def validate(
     device: torch.device,
     use_amp: bool,
     threshold: float,
+    sliding_window: dict[str, Any] | None = None,
 ) -> tuple[float, float]:
+    """Validation loss and Dice, with sliding-window inference for 3D volumes.
+
+    ``sliding_window`` (``inference.sliding_window``) is the same inferer the evaluation
+    runner uses, so the monitored ``val_dice`` is computed the way the test Dice will be
+    (a whole 240^3 BraTS volume does not fit in 6 GB of VRAM as one forward pass).
+    """
     model.eval()
     total_loss = 0.0
     dice_sum = 0.0
@@ -200,9 +208,16 @@ def validate(
     for batch in loader:
         images = batch["image"].to(device, non_blocking=True)
         masks = batch["mask"].to(device, non_blocking=True)
-        with torch.autocast(device_type=device.type, enabled=use_amp):
-            logits = model(images)
-            loss = loss_function(logits, masks)
+        if sliding_window is None:
+            with torch.autocast(device_type=device.type, enabled=use_amp):
+                logits = model(images)
+                loss = loss_function(logits, masks)
+        else:
+            logits = sliding_window_predict(
+                model, images, device, amp=use_amp, **sliding_window
+            )
+            with torch.autocast(device_type=device.type, enabled=use_amp):
+                loss = loss_function(logits, masks)
         total_loss += float(loss) * images.shape[0]
         batch_sum, batch_count = batch_dice(logits, masks, threshold=threshold)
         dice_sum += batch_sum
@@ -249,6 +264,7 @@ def train(
     loss_function = build_loss(config).to(device)
     total_epochs = int(epochs or config.require("training.epochs"))
     use_amp = amp_is_enabled(config.get("training.amp", True), device)
+    sliding_window = build_sliding_window(config)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=float(config.require("training.learning_rate")),
@@ -315,7 +331,9 @@ def train(
             model, train_loader, optimizer, loss_function, scaler, device, use_amp
         )
         trained_at = time.perf_counter()
-        val_loss, val_dice = validate(model, val_loader, loss_function, device, use_amp, threshold)
+        val_loss, val_dice = validate(
+            model, val_loader, loss_function, device, use_amp, threshold, sliding_window
+        )
         validated_at = time.perf_counter()
         train_seconds = trained_at - epoch_started
         val_seconds = validated_at - trained_at

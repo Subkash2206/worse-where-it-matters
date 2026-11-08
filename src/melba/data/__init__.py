@@ -20,6 +20,19 @@ from .cvc import (
     discover_cvc_items,
     load_cvc_items,
 )
+from .brats import (
+    BRATS_AUGMENTATION_GROUPS,
+    BRATSDataset,
+    ET_LABEL,
+    MODALITIES,
+    BraTSAugmentation,
+    BraTSItem,
+    discover_brats_cases,
+    foreground_crop,
+    load_brats_items,
+    percentile_normalize,
+    read_brats_case,
+)
 from .cvc_mapping import (
     build_sequence_mapping,
     check_mapping_against_stems,
@@ -59,9 +72,15 @@ from .splits import (
 
 __all__ = [
     "AUGMENTATION_GROUPS",
+    "BRATS_AUGMENTATION_GROUPS",
+    "BRATSDataset",
+    "BraTSAugmentation",
+    "BraTSItem",
     "DEFAULT_STATS_FILE",
+    "ET_LABEL",
     "IMAGENET_MEAN",
     "IMAGENET_STD",
+    "MODALITIES",
     "NORMALIZATION_KINDS",
     "NormalizationSpec",
     "SPLITS",
@@ -79,17 +98,22 @@ __all__ = [
     "check_mapping_against_stems",
     "compute_fold_statistics",
     "contiguous_group_map",
+    "discover_brats_cases",
     "discover_cases",
     "discover_cvc_items",
     "filter_records",
     "folded_splits",
     "folds_summary",
+    "foreground_crop",
     "group_folds",
     "grouped_split",
+    "load_brats_items",
     "load_cvc_items",
     "load_dataset_statistics",
     "load_group_map",
     "mapping_statistics",
+    "percentile_normalize",
+    "read_brats_case",
     "read_split_csv",
     "sequence_ranges",
     "split_file_for_fold",
@@ -163,9 +187,35 @@ def build_dataset(
             fold=resolved_fold,
             train=train,
         )
+    if name == "brats2021":
+        from .brats import BRATSDataset, BraTSAugmentation, load_brats_items
+
+        items = load_brats_items(config, split, fold=resolved_fold)
+        if train:
+            fraction = float(config.get("training.data_fraction", 1.0) or 1.0)
+            items = subsample_training_groups(items, fraction, int(config.require("seed")))
+        section: Mapping[str, Any] = config.section("dataset")
+        normalization: Mapping[str, Any] = section.get("normalization") or {}
+        kind = str(normalization.get("kind", "percentile")).strip().lower()
+        if kind not in {"percentile", "none"}:
+            raise ConfigError(
+                "BraTS normalization must be 'percentile' (per modality over brain "
+                f"voxels) or 'none', got {kind!r}"
+            )
+        return BRATSDataset(
+            items,
+            train=train,
+            patch_size=config.get("dataset.patch_size", (128, 128, 128)),
+            augmentation=BraTSAugmentation.from_config(config) if train else None,
+            target=str(section.get("target", "et")),
+            low_percentile=float(normalization.get("low", 1.0)),
+            high_percentile=float(normalization.get("high", 99.0)),
+            foreground_crop_p=float(section.get("foreground_crop_p", 0.9)),
+            seed=int(config.require("seed")),
+            fold=resolved_fold,
+        )
     raise ConfigError(
-        f"Unknown dataset '{name}'. Implemented datasets: cvc_clinicdb (3D BraTS support "
-        "is the next milestone)."
+        f"Unknown dataset '{name}'. Implemented datasets: cvc_clinicdb, brats2021."
     )
 
 
