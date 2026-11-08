@@ -30,6 +30,14 @@ training:
   val_limit: 40                # fixed seeded subsample of the val fold, every epoch
   val_seed: 0
 
+# 3D volumes are ~60 MB each in float32 and every worker keeps one in flight, so the
+# default 4+4 workers (train + val, persistent) needed ~4 GB of RAM and tripped a
+# MemoryError next to the GPU process. 2+2 workers plus unpinned memory is ~4x lighter and
+# still hides the .npy read latency (0.35 s/patch is GPU-bound, not I/O-bound).
+runtime:
+  num_workers: 2
+  pin_memory: false
+
 # test-time augmentation on the whole test fold (sliding window inference)
 evaluation:
   split: test
