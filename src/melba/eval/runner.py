@@ -420,18 +420,21 @@ def run_evaluation(
                 aggregated = aggregate_probabilities(
                     native_views[:, None], method.aggregator
                 )[0]
-                # BraTS-style datasets hand out brain-cropped arrays plus the crop origin:
-                # place the prediction and the reference back on the original
-                # 240x240x155 grid, so every case is scored on the native grid.  (Dice and
-                # the surface metrics are the same on both grids -- the crop only drops
-                # background-in-both voxels -- but the full grid is what a paper reports.)
-                metric_pred, metric_target = _place_on_native_grid(aggregated, target, sample)
+                # Metrics are computed where the data is: the BraTS cache already hands out
+                # brain-cropped arrays, and compute_case_metrics() additionally restricts
+                # itself to the union bounding box of prediction and reference (plus a
+                # tolerance-wide rim, with an exactness assert and a full-grid fallback).
+                # That is bit-identical to scoring the padded 240x240x155 grid - the box
+                # only drops voxels that are background in both masks - and it removes the
+                # surface-distance transforms over ~9 M voxels that dominated the runtime.
+                # The penalty diagonal still uses the original volume shape.
                 metrics = compute_case_metrics(
-                    metric_pred,
-                    metric_target,
+                    aggregated,
+                    target,
                     spacing=spacing,
                     threshold=threshold,
                     settings=metric_settings,
+                    penalty_shape=sample.get("original_size"),
                 )
                 uncertainty = compute_view_uncertainty(
                     native_views[:, None],
@@ -451,7 +454,10 @@ def run_evaluation(
                 # Sensitivity values: the same distance metrics with an empty
                 # prediction penalised by the image diagonal (all cases, no NaN).
                 if emit_penalized:
-                    diagonal = grid_diagonal_mm(metric_target.shape, spacing)
+                    diagonal = grid_diagonal_mm(
+                        tuple(int(v) for v in (sample.get("original_size") or target.shape)),
+                        spacing,
+                    )
                     for name in PENALIZED_SOURCE_METRICS:
                         if name in values:
                             value = values[name]

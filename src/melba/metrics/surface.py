@@ -37,6 +37,7 @@ from .overlap import as_binary
 __all__ = [
     "average_surface_distance",
     "boundary_f1",
+    "foreground_bbox",
     "grid_diagonal_mm",
     "hausdorff_distance",
     "hausdorff_distance_95",
@@ -44,6 +45,7 @@ __all__ = [
     "normalize_spacing",
     "surface_distances",
     "surface_mask",
+    "surface_metric_bundle",
 ]
 
 
@@ -139,6 +141,94 @@ def _pooled(
     target_bin = as_binary(target)
     d_pred, d_target = surface_distances(pred_bin, target_bin, spacing, connectivity)
     return np.concatenate([d_pred, d_target]), int(pred_bin.sum()), int(target_bin.sum())
+
+
+def foreground_bbox(
+    *masks: np.ndarray, margin: int = 1
+) -> tuple[tuple[slice, ...], bool]:
+    """Bounding box (as slices) of the union foreground of ``masks``, plus a clip flag.
+
+    Returns ``(slices, touches_border)``.  ``touches_border`` is ``True`` when the padded
+    box had to be clipped at the array edge, i.e. when some foreground voxel sits on the
+    array border (there the surface definition already treats the outside as background,
+    so computing inside the clipped box is still exact).  An empty union returns slices
+    covering the whole array.
+    """
+    arrays = [as_binary(mask) for mask in masks]
+    if not arrays:
+        raise ValueError("foreground_bbox needs at least one mask")
+    shape = arrays[0].shape
+    if any(array.shape != shape for array in arrays):
+        raise ValueError("all masks must have the same shape")
+    union = np.zeros(shape, dtype=bool)
+    for array in arrays:
+        union |= array
+    if not union.any():
+        return tuple(slice(0, size) for size in shape), False
+    index = np.argwhere(union)
+    starts = np.maximum(index.min(axis=0) - int(margin), 0)
+    stops = np.minimum(index.max(axis=0) + int(margin) + 1, np.array(shape))
+    touches_border = bool(np.any(starts == 0) or np.any(stops == np.array(shape)))
+    return (
+        tuple(slice(int(start), int(stop)) for start, stop in zip(starts, stops)),
+        touches_border,
+    )
+
+
+def surface_metric_bundle(
+    pred: np.ndarray,
+    target: np.ndarray,
+    spacing: Iterable[float] | float | None = None,
+    *,
+    connectivity: int = 1,
+    percentile: float = 95.0,
+    tolerance_mm: float = 2.0,
+    empty_value: float = float("nan"),
+) -> dict[str, float]:
+    """HD100, HD95, pooled HD95, ASSD and boundary F1 from **one** pair of transforms.
+
+    Each of those five metrics needs the same two surface distance transforms
+    (``pred -> gt`` and ``gt -> pred``); computing them once and reducing the same
+    distributions five times is what makes the surface block of the evaluation affordable.
+    The values are identical to calling :func:`hausdorff_distance`,
+    :func:`hausdorff_distance_95`, :func:`hausdorff_distance_95_pooled`,
+    :func:`average_surface_distance` and :func:`boundary_f1` separately.
+    """
+    if not 0 < float(percentile) <= 100:
+        raise ValueError(f"percentile must be in (0, 100], got {percentile}")
+    if tolerance_mm < 0:
+        raise ValueError(f"tolerance_mm must be non-negative, got {tolerance_mm}")
+    pred_bin = as_binary(pred)
+    target_bin = as_binary(target)
+    if pred_bin.shape != target_bin.shape:
+        raise ValueError(f"pred and target shapes differ: {pred_bin.shape} vs {target_bin.shape}")
+
+    d_pred, d_target = surface_distances(pred_bin, target_bin, spacing, connectivity)
+    if d_pred.size == 0:
+        # degenerate: both empty is a perfect match, exactly one empty is undefined
+        empty = _empty_distance_value(int(pred_bin.sum()), int(target_bin.sum()), empty_value)
+        both_empty = not pred_bin.any() and not target_bin.any()
+        return {
+            "hd": empty,
+            "hd95": empty,
+            "hd95_pooled": empty,
+            "assd": empty,
+            "boundary_f1": 1.0 if both_empty else float(empty_value),
+        }
+
+    pooled = np.concatenate([d_pred, d_target])
+    within = int(np.count_nonzero(d_pred <= tolerance_mm)) + int(
+        np.count_nonzero(d_target <= tolerance_mm)
+    )
+    return {
+        "hd": float(np.max(pooled)),
+        "hd95": float(
+            max(np.percentile(d_pred, percentile), np.percentile(d_target, percentile))
+        ),
+        "hd95_pooled": float(np.percentile(pooled, percentile)),
+        "assd": float(np.mean(pooled)),
+        "boundary_f1": float(within / pooled.size),
+    }
 
 
 def hausdorff_distance(

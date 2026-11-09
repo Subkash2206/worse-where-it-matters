@@ -65,8 +65,9 @@ class ExperimentSpec:
         return _REPO_ROOT / self.config
 
 
-#: every experiment the project knows about; ``brats`` is the 3D milestone and has no
-#: config yet, so it is reported as "config missing" instead of silently disappearing
+#: every experiment the project knows about; ``brats`` follows the config the grid
+#: actually trains (``segresnet_reduced.yaml``), otherwise status looks in the
+#: ``brats2021_segresnet`` checkpoint/result directories and reports 0/5 forever
 EXPERIMENTS: tuple[ExperimentSpec, ...] = (
     ExperimentSpec("unet", "configs/cvc_clinicdb/unet_resnet50.yaml"),
     ExperimentSpec("swin", "configs/cvc_clinicdb/swinunetr_2d.yaml"),
@@ -77,7 +78,7 @@ EXPERIMENTS: tuple[ExperimentSpec, ...] = (
     ExperimentSpec(
         "data050", "configs/cvc_clinicdb/unet_resnet50_data050.yaml", seeds=(0,)
     ),
-    ExperimentSpec("brats", "configs/brats2021/segresnet.yaml", seeds=(0,)),
+    ExperimentSpec("brats", "configs/brats2021/segresnet_reduced.yaml", seeds=(0,)),
 )
 
 #: seconds assumed for a CPU post-processing step (aggregate / compare) in the queue ETA

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, fields
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 
@@ -22,11 +22,13 @@ from .overlap import as_binary, dice, jaccard, precision, recall, volume_mm3
 from .surface import (
     average_surface_distance,
     boundary_f1,
+    foreground_bbox,
     grid_diagonal_mm,
     hausdorff_distance,
     hausdorff_distance_95,
     hausdorff_distance_95_pooled,
     normalize_spacing,
+    surface_metric_bundle,
 )
 from .uncertainty import UNCERTAINTY_METRICS
 
@@ -146,6 +148,10 @@ def compute_case_metrics(
     spacing: Iterable[float] | float | None = None,
     threshold: float = 0.5,
     settings: MetricSettings | None = None,
+    *,
+    penalty_shape: Sequence[int] | None = None,
+    restrict_to_bbox: bool = True,
+    bbox_margin: int | None = None,
 ) -> dict[str, Any]:
     """Compute the configured ground-truth metrics for one prediction/reference pair.
 
@@ -164,6 +170,20 @@ def compute_case_metrics(
         metrics that are undefined for empty masks are returned as ``nan`` and the
         case is flagged through ``empty_flag``; ``"penalize"`` replaces them by the
         image diagonal (sensitivity analysis only).
+    penalty_shape:
+        Shape used for that image diagonal.  When the arrays were cropped (see
+        ``restrict_to_bbox``) the caller passes the *original* shape, so a penalised
+        value cannot depend on how much background was cropped away.
+    restrict_to_bbox:
+        Compute inside the union bounding box of both masks (plus ``bbox_margin``)
+        instead of the whole array.  This is exact - the box contains every foreground
+        voxel of both masks and a background rim, so no surface voxel changes and no
+        background voxel contributes to these metrics - and it is what keeps a
+        240x240x155 evaluation affordable.  The box is asserted to contain both masks;
+        if it does not (should be impossible) the full array is used instead.
+    bbox_margin:
+        Background rim kept around the box, in voxels.  Defaults to a rim wide enough for
+        the boundary-F1 tolerance, so cropped and full-grid values agree exactly.
 
     Returns
     -------
@@ -177,9 +197,46 @@ def compute_case_metrics(
         raise ValueError(f"pred and target shapes differ: {pred_bin.shape} vs {target_bin.shape}")
 
     spacing_values = normalize_spacing(spacing, pred_bin.ndim)
-    penalty = grid_diagonal_mm(pred_bin.shape, spacing_values)
+    full_shape = tuple(int(size) for size in (penalty_shape or pred_bin.shape))
+    # the margin keeps a rim of background inside the box: with it the box can never clip
+    # a surface voxel, so every metric is bit-identical to the full-array computation
+    margin = (
+        int(bbox_margin)
+        if bbox_margin is not None
+        else max(1, int(math.ceil(float(settings.boundary_tolerance_mm) / min(spacing_values))))
+    )
+    box = tuple(slice(0, size) for size in pred_bin.shape)
+    cropped = False
+    if restrict_to_bbox and any(size > 1 for size in pred_bin.shape):
+        candidate, _touches_border = foreground_bbox(pred_bin, target_bin, margin=margin)
+        cropped_pred = pred_bin[candidate]
+        cropped_target = target_bin[candidate]
+        # exactness guard: the box must contain the masks, otherwise use the whole array
+        if (
+            int(cropped_pred.sum()) == int(pred_bin.sum())
+            and int(cropped_target.sum()) == int(target_bin.sum())
+        ):
+            box = candidate
+            pred_bin = np.ascontiguousarray(cropped_pred)
+            target_bin = np.ascontiguousarray(cropped_target)
+            cropped = True
+
+    penalty = grid_diagonal_mm(full_shape, spacing_values)
     flag = empty_flag(pred_bin, target_bin)
     both_empty = flag == "both_empty"
+
+    # one pair of surface distance transforms, reused by HD100/HD95/HD95_pooled/ASSD/BF1
+    surface_names = {"hd", "hd95", "hd95_pooled", "assd", "boundary_f1"}
+    surface_values: dict[str, float] | None = None
+    if surface_names.intersection(settings.gt_names):
+        surface_values = surface_metric_bundle(
+            pred_bin,
+            target_bin,
+            spacing_values,
+            connectivity=settings.connectivity,
+            percentile=settings.hd_percentile,
+            tolerance_mm=settings.boundary_tolerance_mm,
+        )
 
     results: dict[str, Any] = {}
     for name in settings.gt_names:
@@ -191,6 +248,8 @@ def compute_case_metrics(
             value = precision(pred_bin, target_bin)
         elif name == "recall":
             value = recall(pred_bin, target_bin)
+        elif name in surface_names and surface_values is not None:
+            value = surface_values[name]
         elif name == "hd":
             value = hausdorff_distance(pred_bin, target_bin, spacing_values, settings.connectivity)
         elif name == "hd95":

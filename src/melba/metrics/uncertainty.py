@@ -55,7 +55,12 @@ _EPS = 1e-7
 
 
 def _validate(per_view: np.ndarray) -> np.ndarray:
-    array = np.asarray(per_view, dtype=np.float64)
+    # Conversion to float64 only when needed: the runner passes float32 view stacks of
+    # 15 x 3.7 M voxels, and an unconditional astype would copy ~450 MB on *every*
+    # descriptor (that copy used to dominate the uncertainty block of the evaluation).
+    array = np.asarray(per_view)
+    if array.dtype != np.float64:
+        array = array.astype(np.float64)
     if array.ndim < 3:
         raise ValueError(
             f"per-view probabilities must have shape (V, C, *spatial), got {array.shape}"
