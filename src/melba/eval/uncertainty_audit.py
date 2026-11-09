@@ -91,10 +91,16 @@ def map_statistics(
     threshold: float = 0.5,
     band_px: int = DEFAULT_BAND_PX,
 ) -> MapStats:
-    """Statistics of a mean probability map, using the runner's exact ROI definition."""
+    """Statistics of a mean probability map, using the runner's exact ROI definition.
+
+    Works for 2-D (polyp) and 3-D (BraTS) maps: everything below is elementwise or a
+    mean over the array, and ``foreground_band`` / ``predictive_entropy_map`` are
+    dimension-agnostic.  ``area_px`` is therefore "foreground pixels" for 2-D data and
+    "foreground voxels" for 3-D data.
+    """
     probability = np.asarray(mean_map, dtype=np.float64)
-    if probability.ndim != 2:
-        raise ValueError(f"expected a 2-D probability map, got {probability.shape}")
+    if probability.ndim < 2:
+        raise ValueError(f"expected a probability map with >= 2 dims, got {probability.shape}")
     mask = probability > float(threshold)
     roi = foreground_band(mask, band_px)
     entropy = predictive_entropy_map(probability)
