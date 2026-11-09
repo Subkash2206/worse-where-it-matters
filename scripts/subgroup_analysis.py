@@ -41,6 +41,7 @@ from melba.eval.subgroups import (  # noqa: E402
     lesion_size_table,
     subgroup_delta_table,
     subgroup_interaction_table,
+    subgroup_mcnemar_table,
     subgroup_summary_table,
     tertile_cutoffs,
 )
@@ -85,6 +86,7 @@ def _analyse_model(
         "subgroup_delta": subgroup_delta_table(
             enriched, metrics=tuple(args.metrics), n_bootstrap=args.n_bootstrap
         ),
+        "subgroup_mcnemar": subgroup_mcnemar_table(enriched),
         "subgroup_interaction": subgroup_interaction_table(
             enriched, metrics=tuple(args.metrics), n_bootstrap=args.n_bootstrap
         ),
@@ -108,6 +110,7 @@ def _concat(tables: dict[str, pd.DataFrame], key: str) -> pd.DataFrame:
 def _write_markdown(output_dir: Path, tables: dict[str, pd.DataFrame], sizes: pd.DataFrame) -> None:
     summary = _concat(tables, "subgroup_summary")
     deltas = _concat(tables, "subgroup_delta")
+    mcnemar = _concat(tables, "subgroup_mcnemar")
     interaction = _concat(tables, "subgroup_interaction")
     empty = _concat(tables, "subgroup_empty_reference")
     delta_columns = [
@@ -136,6 +139,15 @@ def _write_markdown(output_dir: Path, tables: dict[str, pd.DataFrame], sizes: pd
             deltas[delta_columns] if delta_columns else deltas,
             "The same paired comparison as the main tables, computed inside each bin: a "
             "negative HD95 delta means the treatment is better there.",
+        ),
+        (
+            "Missed-detection transitions per bin (exact McNemar, Holm across bins x methods)",
+            mcnemar,
+            "`new_misses` counts cases the control detected and the treatment missed, "
+            "`recovered` the opposite, and `mcnemar_p_adjusted` is Holm-corrected over every "
+            "bin x method test shown (`correction` states the family). A treatment can gain "
+            "mean Dice and still create new misses on small lesions - that is what this table "
+            "is for.",
         ),
         (
             "Interaction: does the TTA gain differ across size bins?",

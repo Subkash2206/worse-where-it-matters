@@ -25,6 +25,7 @@ from melba.eval.subgroups import (  # noqa: E402
     empty_reference_subgroup_table,
     subgroup_delta_table,
     subgroup_interaction_table,
+    subgroup_mcnemar_table,
     subgroup_summary_table,
     tertile_cutoffs,
 )
@@ -163,7 +164,71 @@ def test_interaction_is_null_when_the_gain_is_uniform() -> None:
     assert row["gap_ci_low"] <= 0.0 <= row["gap_ci_high"]
 
 
-def test_empty_reference_subgroup_is_empty_for_polyp_data() -> None:
+def test_mcnemar_table_counts_transitions_per_bin_and_corrects_holm() -> None:
+    """New misses and recovered cases are counted per bin, Holm across bins x methods."""
+    # baseline misses nothing; tta4 newly misses the three largest cases of the small bin
+    rows = []
+    for index in range(30):
+        case = f"case_{index:02d}"
+        group = f"video_{index % 6}"
+        size = 500 + index * 500
+        small = index < 10
+        for method in ("baseline", "tta4"):
+            missed = bool(small and method == "tta4" and index < 3)
+            flag = "pred_empty" if missed else "both_nonempty"
+            base = {
+                "run_id": method,
+                "created_utc": "2026-01-01T00:00:00Z",
+                "config_path": "",
+                "config_hash": "x",
+                "seed": 0,
+                "dataset": "cvc_clinicdb",
+                "model": "m",
+                "split": "test",
+                "fold": 0,
+                "method": method,
+                "aggregator": "mean",
+                "n_views": 1,
+                "view_names": "identity",
+                "threshold": 0.5,
+                "spacing_mm": "1,1",
+                "case_id": case,
+                "group_id": group,
+                "empty_flag": flag,
+                "missed_detection": int(missed),
+            }
+            rows.append({**base, "metric": "dice", "value": 0.0 if missed else 0.8})
+    frame = pd.DataFrame(rows)
+    sizes = _sizes(frame)
+    enriched, _ = add_size_bins(frame, sizes)
+    table = subgroup_mcnemar_table(enriched, treatments=("tta4",))
+    small = table.loc[table["size_bin"] == "small"].iloc[0]
+    assert small["new_misses"] == 3
+    assert small["recovered"] == 0
+    assert small["net_change"] == -3
+    assert small["mcnemar_p"] < 0.5  # three discordant pairs, all in one direction
+    assert small["mcnemar_p_adjusted"] >= small["mcnemar_p"]
+    assert "holm" in small["correction"] and "3 bin x method" in small["correction"]
+    # the bins without any discordant pair report p = 1
+    for bin_label in ("medium", "large"):
+        row = table.loc[table["size_bin"] == bin_label].iloc[0]
+        assert row["new_misses"] == 0 and row["recovered"] == 0
+        assert row["mcnemar_p"] == 1.0
+
+
+def test_empty_references_are_excluded_from_the_size_bins() -> None:
+    """A case with no reference lesion belongs to the empty subgroup, not to `small`."""
+    frame = _long_frame(cases=12, videos=3)
+    sizes = _sizes(frame)
+    sizes.loc[sizes["case_id"] == "case_00", "gt_pixels"] = 0
+    sizes.loc[sizes["case_id"] == "case_00", "gt_mm3"] = 0.0
+    enriched, cutoffs = add_size_bins(frame, sizes)
+    empty_case = enriched.loc[enriched["case_id"] == "case_00"]
+    assert empty_case["size_bin"].isna().all()
+    assert cutoffs[0] > 0  # the cutoffs ignore the empty reference
+    included = add_size_bins(frame, sizes, include_empty=True)[0]
+    assert included.loc[included["case_id"] == "case_00", "size_bin"].iloc[0] == "small"
+
     frame = _long_frame()
     enriched, _ = add_size_bins(frame, _sizes(frame))
     table = empty_reference_subgroup_table(enriched, n_bootstrap=100)

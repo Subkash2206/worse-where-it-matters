@@ -1,0 +1,66 @@
+# -----------------------------------------------------------------------------
+# Finish the BraTS 2021 grid, then the external polyp validation: one GPU job at a time.
+#
+# The queue waits for the running BraTS grid (logs/brats_reduced_grid.pid) to exit, then
+# runs, in order:
+#   1. BraTS fold 0 evaluate-only        (fold 0 trained but its evaluation crashed)
+#   2. BraTS aggregate                   (segresnet_reduced, seed 0)
+#   3. BraTS subgroup analysis           (ET-volume tertiles + empty-ET subgroup)
+#   4. external polyp evaluation         (UNet + SwinUNetR, 5 folds x 3 seeds, 3 datasets)
+#   5. external aggregate                (re-pool; ends with a cross-dataset summary)
+#
+# Start it detached (note: queue files live in `queues/`, not in `configs/`, because every
+# YAML under `configs/` must load as a MELBA experiment config):
+#   Start-Process python -ArgumentList '-u','scripts\run_queue.py','--queue',
+#       'queues\brats_finish.yaml' -WorkingDirectory . -WindowStyle Hidden \
+#       -RedirectStandardOutput logs\finish_queue.out -RedirectStandardError logs\finish_queue.err
+#
+# Check / stop: see the commands printed by `--dry-run` and the README section.
+# Re-running the same queue resumes: fold 0 is skipped once its evaluation marker exists,
+# external runs whose per-case CSV exists are skipped, aggregates are cheap and repeatable.
+# -----------------------------------------------------------------------------
+name: finish_queue
+wait_for_pid_file: logs/brats_reduced_grid.pid
+max_wait_hours: 14
+
+steps:
+  - name: brats_fold0_eval
+    kind: evaluate
+    config: configs/brats2021/segresnet_reduced.yaml
+    fold: 0
+    seed: 0
+
+  - name: brats_aggregate
+    kind: aggregate
+    config: configs/brats2021/segresnet_reduced.yaml
+    seeds: [0]
+    folds: [0, 1, 2, 3, 4]
+
+  - name: brats_subgroups
+    kind: subgroup
+    models: [brats2021/segresnet_reduced]
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0]
+    metrics: [dice, hd95]
+    n_bootstrap: 2000
+    output_dir: results/subgroups_brats2021
+
+  - name: external_polyp
+    kind: external
+    config: configs/external/polyp_external.yaml
+    models: [cvc_clinicdb/unet_resnet50, cvc_clinicdb/swinunetr_2d]
+    datasets: [kvasir_seg, cvc_colondb, etis_larib]
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    n_bootstrap: 10000
+    attempts: 2
+
+  - name: external_aggregate
+    kind: external
+    config: configs/external/polyp_external.yaml
+    models: [cvc_clinicdb/unet_resnet50, cvc_clinicdb/swinunetr_2d]
+    datasets: [kvasir_seg, cvc_colondb, etis_larib]
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    n_bootstrap: 10000
+    aggregate_only: true

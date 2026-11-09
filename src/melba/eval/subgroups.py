@@ -114,9 +114,18 @@ def add_size_bins(
     *,
     column: str = "gt_pixels",
     cutoffs: Sequence[float] | None = None,
+    include_empty: bool = False,
 ) -> tuple[pd.DataFrame, list[float]]:
-    """Attach ``gt_pixels``/``gt_mm3`` and a tertile ``size_bin`` to a long-format frame."""
-    resolved = list(cutoffs) if cutoffs is not None else tertile_cutoffs(sizes[column])
+    """Attach ``gt_pixels``/``gt_mm3`` and a tertile ``size_bin`` to a long-format frame.
+
+    ``include_empty=False`` (the default) keeps cases whose reference is empty **out of the
+    size bins**: they have no lesion size, so they belong to the empty-reference subgroup,
+    and letting them fall into the "small" bin would mix "tiny polyp" with "no polyp at all"
+    (BraTS ET has ~3 % such patients).  The tertile cutoffs are computed over the non-empty
+    references only.
+    """
+    positive = sizes.loc[sizes[column] > 0]
+    resolved = list(cutoffs) if cutoffs is not None else tertile_cutoffs(positive[column])
     if len(resolved) != 2:
         raise ValueError(f"exactly two cutoffs are needed, got {resolved}")
     mapping = sizes.set_index("case_id")[["gt_pixels", "gt_mm3"]]
@@ -130,8 +139,11 @@ def add_size_bins(
         np.where(values <= resolved[1], SIZE_BIN_LABELS[1], SIZE_BIN_LABELS[2]),
     )
     enriched["size_bin"] = pd.Categorical(labels, categories=list(SIZE_BIN_LABELS), ordered=True)
-    enriched.loc[~np.isfinite(values), "size_bin"] = np.nan
+    excluded = ~np.isfinite(values) | (values <= 0)
+    if not include_empty:
+        enriched.loc[excluded, "size_bin"] = np.nan
     return enriched, sorted(resolved)
+
 
 
 def _cluster_mean_ci(
@@ -404,6 +416,70 @@ def subgroup_interaction_table(
     if table.empty:
         return table
     return table.sort_values(["metric", "treatment"]).reset_index(drop=True)
+
+
+def subgroup_mcnemar_table(
+    frame: pd.DataFrame,
+    *,
+    control: str = "baseline",
+    treatments: Sequence[str] = ("tta2", "tta4", "tta8"),
+    unit: str = "case",
+    correction: str = "holm",
+) -> pd.DataFrame:
+    """Exact McNemar per size bin: does TTA change *which* cases are missed?
+
+    For every bin and treatment the table reports the transition counts against the control
+    (``nonempty_to_empty`` = **new misses**, ``empty_to_nonempty`` = **recovered cases**,
+    both non-empty, both empty) and the exact two-sided McNemar p on the discordant pairs.
+    ``mcnemar_p_adjusted`` is Holm-corrected **across all bins and methods shown**, so the
+    family is "every bin x every TTA method", not one bin at a time - otherwise three bins
+    and three methods would each get a free 5 %.
+
+    A mean Dice gain and a significant increase in new misses are perfectly compatible; this
+    table is what makes the second half visible.
+    """
+    from melba.stats import holm_adjust, transition_table
+
+    rows: list[dict[str, Any]] = []
+    for bin_label in SIZE_BIN_LABELS:
+        subset = frame.loc[frame["size_bin"] == bin_label]
+        if subset.empty:
+            continue
+        available = set(subset["method"].astype(str))
+        for treatment in treatments:
+            if treatment not in available or control not in available:
+                continue
+            try:
+                counts = transition_table(subset, treatment, control=control, unit=unit)
+            except ValueError:
+                continue
+            rows.append(
+                {
+                    "size_bin": bin_label,
+                    "control": control,
+                    "treatment": treatment,
+                    "unit": unit,
+                    "n_units": int(counts["n"]),
+                    "both_nonempty": int(counts["both_nonempty"]),
+                    "new_misses": int(counts["nonempty_to_empty"]),
+                    "recovered": int(counts["empty_to_nonempty"]),
+                    "both_empty": int(counts["both_empty"]),
+                    "net_change": int(counts["empty_to_nonempty"])
+                    - int(counts["nonempty_to_empty"]),
+                    "mcnemar_p": float(counts["mcnemar_p"]),
+                }
+            )
+    table = pd.DataFrame(rows)
+    if table.empty:
+        return table
+    if correction == "holm":
+        table["mcnemar_p_adjusted"] = holm_adjust(table["mcnemar_p"].to_numpy(dtype=float))
+    elif correction in (None, "none"):
+        table["mcnemar_p_adjusted"] = table["mcnemar_p"]
+    else:  # pragma: no cover - guarded by the caller
+        raise ValueError(f"Unknown correction {correction!r}; expected 'holm' or 'none'")
+    table["correction"] = f"{correction} across {len(table)} bin x method tests"
+    return table
 
 
 def empty_reference_subgroup_table(

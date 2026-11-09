@@ -68,6 +68,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--n-bootstrap", type=int, default=None)
     parser.add_argument("--output-dir", default=None)
+    parser.add_argument(
+        "--aggregate-only",
+        action="store_true",
+        help="skip the evaluations and only re-pool the per-case CSVs that already exist",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="re-evaluate runs whose per-case CSV already exists (default: resume, skip)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="print the plan and exit")
     parser.add_argument("--set", dest="overrides", nargs="*", default=[], metavar="KEY=VALUE")
     return parser.parse_args(argv)
@@ -330,6 +340,13 @@ def main(argv: list[str] | None = None) -> int:
                 save_maps=save_maps,
                 limit=args.limit,
             )
+            expected = per_case_path(
+                config, step["fold"], step["seed"], output_dir=dataset_dir / "evaluation"
+            )
+            if args.aggregate_only or (expected.is_file() and not args.force):
+                # resume: the run already wrote its per-case CSV, do not spend GPU time again
+                print(f"[{step['model']} fold{step['fold']} seed{step['seed']}] exists, skipped")
+                continue
             print(
                 f"[{step['model']} fold{step['fold']} seed{step['seed']}] evaluating",
                 flush=True,

@@ -104,3 +104,75 @@ def test_step_logs_are_named_per_step(tmp_path) -> None:
     queue = load_queue(_write(tmp_path))
     logs = [step_log_path(step).name for step in queue["steps"]]
     assert logs == ["exp_a_grid.log", "agg_a_aggregate.log", "cmp_ab_compare.log"]
+
+
+def test_evaluate_subgroup_and_external_steps(tmp_path) -> None:
+    """The finish-queue step kinds: evaluate-only, subgroup analysis, external evaluation."""
+    source = tmp_path / "finish.yaml"
+    source.write_text(
+        """
+name: finish
+steps:
+  - name: fold0
+    kind: evaluate
+    config: configs/brats2021/segresnet_reduced.yaml
+    fold: 0
+    seed: 0
+  - name: subgroups
+    kind: subgroup
+    models: [brats2021/segresnet_reduced]
+    folds: [0, 1]
+    seeds: [0]
+    metrics: [dice, hd95]
+    n_bootstrap: 500
+    output_dir: results/subgroups_brats2021
+  - name: external
+    kind: external
+    config: configs/external/polyp_external.yaml
+    models: [cvc_clinicdb/unet_resnet50]
+    datasets: [kvasir_seg]
+    folds: [0]
+    seeds: [0, 1]
+    attempts: 2
+  - name: external_agg
+    kind: external
+    config: configs/external/polyp_external.yaml
+    datasets: [kvasir_seg]
+    aggregate_only: true
+""",
+        encoding="utf-8",
+    )
+    queue = load_queue(source)
+    evaluate = step_command(queue["steps"][0], python="python")
+    assert evaluate[2].endswith("evaluate.py")
+    assert evaluate[evaluate.index("--fold") + 1] == "0"
+    assert evaluate[evaluate.index("--set") + 1] == "seed=0"
+
+    subgroup = step_command(queue["steps"][1], python="python")
+    assert subgroup[2].endswith("subgroup_analysis.py")
+    assert subgroup[subgroup.index("--models") + 1] == "brats2021/segresnet_reduced"
+    assert subgroup[subgroup.index("--n-bootstrap") + 1] == "500"
+    assert subgroup[subgroup.index("--output-dir") + 1] == "results/subgroups_brats2021"
+
+    external = step_command(queue["steps"][2], python="python")
+    assert external[2].endswith("evaluate_external.py")
+    assert external[external.index("--datasets") + 1] == "kvasir_seg"
+    assert external[external.index("--seeds") + 1 : external.index("--seeds") + 3] == ["0", "1"]
+    assert "--aggregate-only" not in external
+    aggregate_only = step_command(queue["steps"][3], python="python")
+    assert "--aggregate-only" in aggregate_only
+    assert [step_log_path(step).name for step in queue["steps"]] == [
+        "fold0_evaluate.log",
+        "subgroups_subgroup.log",
+        "external_external.log",
+        "external_agg_external.log",
+    ]
+
+
+def test_load_queue_rejects_subgroup_without_models(tmp_path) -> None:
+    source = tmp_path / "bad.yaml"
+    source.write_text(
+        "name: bad\nsteps:\n  - name: s\n    kind: subgroup\n    folds: [0]\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="models"):
+        load_queue(source)

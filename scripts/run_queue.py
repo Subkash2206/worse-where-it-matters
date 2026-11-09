@@ -56,7 +56,14 @@ if str(_REPO_ROOT / "src") not in sys.path:  # pragma: no cover - import side ef
 
 from melba.pidfile import LAUNCHER_PROCESS_NAMES, pid_alive, read_pid_file  # noqa: E402
 
-STEP_KINDS: tuple[str, ...] = ("grid", "aggregate", "compare")
+STEP_KINDS: tuple[str, ...] = (
+    "grid",
+    "aggregate",
+    "compare",
+    "evaluate",
+    "subgroup",
+    "external",
+)
 
 
 def _stamp() -> str:
@@ -85,10 +92,12 @@ def load_queue(path: str | Path) -> dict[str, Any]:
             raise ValueError(
                 f"{source}: step '{name}' has kind '{kind}'; expected one of {list(STEP_KINDS)}"
             )
-        if kind in {"grid", "aggregate"} and not step.get("config"):
+        if kind in {"grid", "aggregate", "evaluate", "external"} and not step.get("config"):
             raise ValueError(f"{source}: step '{name}' needs a 'config'")
         if kind == "compare" and len(step.get("configs") or []) < 2:
             raise ValueError(f"{source}: step '{name}' needs at least two 'configs'")
+        if kind == "subgroup" and not step.get("models"):
+            raise ValueError(f"{source}: step '{name}' needs a 'models' list")
         step["name"] = name
         step["kind"] = kind
     resolved = dict(data)
@@ -131,6 +140,62 @@ def step_command(step: Mapping[str, Any], *, python: str = sys.executable) -> li
             values = step.get(key)
             if values:
                 command += [flag, *[str(int(value)) for value in values]]
+        return command
+    if kind == "evaluate":
+        # evaluate-only: re-run the test-set evaluation of a trained fold/seed
+        command = [
+            python,
+            "-u",
+            str(_REPO_ROOT / "scripts" / "evaluate.py"),
+            "--config",
+            str(step["config"]),
+            "--fold",
+            str(int(step.get("fold", 0))),
+            "--set",
+            f"seed={int(step.get('seed', 0))}",
+        ]
+        if step.get("limit") is not None:
+            command += ["--limit", str(int(step["limit"]))]
+        return command
+    if kind == "subgroup":
+        command = [
+            python,
+            "-u",
+            str(_REPO_ROOT / "scripts" / "subgroup_analysis.py"),
+            "--models",
+            *[str(model) for model in step["models"]],
+        ]
+        for key, flag in (("folds", "--folds"), ("seeds", "--seeds"), ("metrics", "--metrics")):
+            values = step.get(key)
+            if values:
+                command += [flag, *[str(value) for value in values]]
+        if step.get("n_bootstrap") is not None:
+            command += ["--n-bootstrap", str(int(step["n_bootstrap"]))]
+        if step.get("output_dir"):
+            command += ["--output-dir", str(step["output_dir"])]
+        return command
+    if kind == "external":
+        command = [
+            python,
+            "-u",
+            str(_REPO_ROOT / "scripts" / "evaluate_external.py"),
+            "--config",
+            str(step["config"]),
+        ]
+        for key, flag in (("models", "--models"), ("datasets", "--datasets")):
+            values = step.get(key)
+            if values:
+                command += [flag, *[str(value) for value in values]]
+        for key, flag in (("folds", "--folds"), ("seeds", "--seeds")):
+            values = step.get(key)
+            if values:
+                command += [flag, *[str(int(value)) for value in values]]
+        if step.get("n_bootstrap") is not None:
+            command += ["--n-bootstrap", str(int(step["n_bootstrap"]))]
+        if step.get("output_dir"):
+            command += ["--output-dir", str(step["output_dir"])]
+        if step.get("aggregate_only"):
+            command += ["--aggregate-only"]
         return command
     command = [
         python,
@@ -266,7 +331,9 @@ def main(argv: list[str] | None = None) -> int:
             kind = str(step.get("kind", "grid")).strip().lower()
             command = step_command(step)
             step_log = step_log_path(step)
-            attempts = 1 if kind != "grid" else max(1, int(step.get("attempts", 1)))
+            attempts = (
+                max(1, int(step.get("attempts", 1))) if kind in {"grid", "external"} else 1
+            )
             code = 1
             for attempt in range(1, attempts + 1):
                 log(

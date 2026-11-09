@@ -578,6 +578,50 @@ delta means its empty-reference false positives cost more than those perfect sco
 For a dataset without empty references (CVC) the delta is exactly 0 and the
 `false_positive_*` tables report `n_cases = 0`.
 
+### Subgroups: who pays for the mean
+
+`scripts/subgroup_analysis.py` also writes `subgroup_mcnemar.csv`: for every size bin and TTA
+method the missed-detection **transition counts** against the baseline (`new_misses` /
+`recovered` / `both_nonempty` / `both_empty`), a `net_change`, and an exact McNemar test whose
+p-values are Holm-corrected across the whole bin x method family (`correction` states it).
+Empty-reference cases are kept out of the size bins (they have no size) and reported in
+`subgroup_empty_reference.csv` instead.
+
+`python scripts/subgroup_figures.py --method tta8 --bin small` renders the small polyps that
+TTA newly misses - reference, baseline and TTA side by side - into
+`results/subgroups/figures/`. The predictions are recomputed **on the CPU** through the same
+runner path, so figures never cost GPU time.
+
+### Unattended finish queue
+
+`queues/brats_finish.yaml` waits for a running job and then runs one GPU job at a time: BraTS
+fold 0 evaluate-only -> BraTS aggregate -> BraTS subgroup analysis (ET-volume tertiles +
+empty-ET subgroup) -> external polyp evaluation (UNet + SwinUNetR on Kvasir-SEG /
+CVC-ColonDB / ETIS) -> external aggregate. Every step has its own log, the queue its own log
+and pid file, and re-running the same command resumes (evaluate-only is skipped once its
+marker exists, external runs whose per-case CSV exists are skipped, aggregates are
+repeatable). Queue files live in `queues/`, not in `configs/`, because every YAML under
+`configs/` must load as a MELBA experiment config.
+
+```powershell
+# start detached (waits for logs\brats_reduced_grid.pid automatically)
+Start-Process python -ArgumentList '-u','scripts\run_queue.py','--queue','queues\brats_finish.yaml' `
+    -WorkingDirectory . -WindowStyle Hidden `
+    -RedirectStandardOutput logs\finish_queue.out -RedirectStandardError logs\finish_queue.err
+
+# check
+Get-Content logs\finish_queue.log -Tail 20
+Get-Content logs\finish_queue.pid                 # absent again when the queue is done
+Get-Content logs\finish_queue_summary.json
+
+# stop (queue + its current step + that step's children)
+function Stop-Tree([int]$Id) {
+  Get-CimInstance Win32_Process -Filter "ParentProcessId=$Id" | ForEach-Object { Stop-Tree $_.ProcessId }
+  Stop-Process -Id $Id -Force -ErrorAction SilentlyContinue
+}
+Stop-Tree (Get-Content logs\finish_queue.pid)
+```
+
 ## Input normalization
 
 Images are loaded into `[0, 1]` and then normalized with the encoder's own
