@@ -686,6 +686,7 @@ def aggregate_all(
     correction: str = "holm",
     ensemble: bool = True,
     expected_seeds: Sequence[int] = (0, 1, 2),
+    ensemble_min_seeds: int = 2,
     ground_truth: Mapping[int, Mapping[str, Mapping[str, Any]]] | None = None,
     output_dir: str | Path | None = None,
 ) -> AggregateResult:
@@ -840,7 +841,17 @@ def aggregate_all(
 
     available_seeds = sorted(by_seed)
     required_seeds = sorted({int(seed) for seed in expected_seeds})
-    if ensemble and set(required_seeds) <= set(available_seeds):
+    single_seed = len(available_seeds) < max(1, int(ensemble_min_seeds))
+    if ensemble and single_seed:
+        # the ensemble is "the mean map of the seeds": with one seed it would just re-evaluate
+        # that run (and would need its probability maps, which a capped map set does not
+        # have).  Say so instead of raising or silently spending GPU time.
+        notes.append(
+            "ensemble skipped: an ensemble needs at least "
+            f"{max(1, int(ensemble_min_seeds))} seeds, got {len(available_seeds)} "
+            f"({available_seeds}); the single run is already reported"
+        )
+    if ensemble and not single_seed and set(required_seeds) <= set(available_seeds):
         ensemble_runs = [run for run in runs if run.seed in set(required_seeds)]
         frames: list[pd.DataFrame] = []
         for name, source in ENSEMBLES.items():
@@ -921,7 +932,7 @@ def aggregate_all(
             tables["ensemble_challenge_scoring"] = challenge_scoring_table(
                 comparison, n_bootstrap=n_bootstrap, ci=ci, seed=bootstrap_seed
             )
-    elif ensemble:
+    elif ensemble and not single_seed:
         notes.append(
             "ensemble skipped: needs seeds "
             f"{required_seeds}, found {available_seeds}"

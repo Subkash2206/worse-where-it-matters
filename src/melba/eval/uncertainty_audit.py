@@ -447,12 +447,23 @@ def detector_difference(
     return result
 
 
-def _load_maps(runs: Sequence[Any], case_id: str, method: str) -> list[np.ndarray]:
+def _load_maps(
+    runs: Sequence[Any], case_id: str, method: str, *, required: bool = True
+) -> list[np.ndarray] | None:
+    """Saved probability maps of one case, or ``None`` when they were not persisted.
+
+    Evaluations that keep only a seeded subset of maps (``evaluation.probability_map_cases``,
+    as the BraTS grid does) have maps for a handful of cases and none for the rest; a
+    missing map is then a *normal* condition, not an error.  With ``required=False`` the
+    caller gets ``None`` and falls back to the per-case uncertainty columns of the CSV.
+    """
     maps = []
     for run in runs:
         path = Path(run.map_dir) / f"{case_id}__{method}__mean.npy"
         if not path.is_file():
-            raise FileNotFoundError(f"missing probability map {path}")
+            if required:
+                raise FileNotFoundError(f"missing probability map {path}")
+            return None
         maps.append(np.load(path).astype(np.float32))
     return maps
 
@@ -560,12 +571,20 @@ def build_case_table(
     runs_by_fold: dict[int, list[Any]] = {}
     for run in runs:
         runs_by_fold.setdefault(int(run.fold), []).append(run)
+    maps_used = 0
+    maps_missing = 0
     for fold, fold_runs in runs_by_fold.items():
         ordered = sorted(fold_runs, key=lambda item: item.seed)
         for index in table.index[table["fold"] == fold]:
             case_id = str(table.at[index, "case_id"])
-            tta4_maps = _load_maps(ordered, case_id, "tta4")
-            baseline_maps = _load_maps(ordered, case_id, "baseline")
+            tta4_maps = _load_maps(ordered, case_id, "tta4", required=False)
+            baseline_maps = _load_maps(ordered, case_id, "baseline", required=False)
+            if tta4_maps is None or baseline_maps is None:
+                # no saved map for this case (a capped map set, not an error): the map-only
+                # descriptors stay NaN and the CSV-derived ones are filled in below
+                maps_missing += 1
+                continue
+            maps_used += 1
             tta4_stats = map_statistics(
                 np.mean(tta4_maps, axis=0), tta4_maps, threshold=threshold, band_px=band_px
             )
@@ -600,7 +619,108 @@ def build_case_table(
         ("ensemble3_tta4_pairwise_dice", "ensemble3_tta4_dice_disagreement"),
     ):
         table[target] = 1.0 - table[source].astype(float)
+    notes = _fill_from_csv(table, averaged, maps_used=maps_used, maps_missing=maps_missing)
+    table.attrs["notes"] = tuple(notes)
     return table
+
+
+def _csv_voxel_area(averaged: pd.DataFrame, method: str) -> pd.Series:
+    """Predicted foreground in voxels, from ``pred_volume_mm3`` and the stored spacing."""
+    wide = _wide(averaged, method, ("pred_volume_mm3",))
+    if "pred_volume_mm3" not in wide.columns:
+        return pd.Series(dtype=float)
+    spacing = (
+        averaged.loc[averaged["method"] == method, ["case_id", "spacing_mm"]]
+        .drop_duplicates("case_id")
+        .assign(case_id=lambda frame: frame["case_id"].astype(str))
+    )
+    wide["case_id"] = wide["case_id"].astype(str)
+    merged = wide.merge(spacing, on="case_id", how="left")
+
+    def voxel_volume(value: Any) -> float:
+        parts = [item for item in str(value or "1").replace(";", ",").split(",") if item.strip()]
+        try:
+            values = [float(item) for item in parts] or [1.0]
+        except ValueError:  # pragma: no cover - only a malformed spacing string
+            return 1.0
+        return float(np.prod(values))
+
+    factor = merged["spacing_mm"].map(voxel_volume).astype(float)
+    return pd.Series(
+        merged["pred_volume_mm3"].astype(float).to_numpy() / factor.to_numpy(),
+        index=merged["case_id"].to_numpy(),
+    )
+
+
+def _fill_from_csv(
+    table: pd.DataFrame,
+    averaged: pd.DataFrame,
+    *,
+    maps_used: int,
+    maps_missing: int,
+) -> list[str]:
+    """Fill the map-only descriptors from the per-case CSV where an equivalent exists.
+
+    The evaluation CSV already carries the descriptors that only need the *view stack*
+    (``entropy_mean_roi``, ``variance_mean_roi``, ``view_pairwise_dice``, ``pred_volume_mm3``),
+    so a run that saved no probability map can still be audited; only the genuinely
+    map-only ones (single-map confidence, ambiguous fraction, ROI mask size, the seed
+    ensembles) stay NaN, and a note says which.
+    """
+    notes: list[str] = []
+    columns = ("entropy_mean_roi", "variance_mean_roi", "view_pairwise_dice", "pred_volume_mm3")
+    tta4 = _wide(averaged, "tta4", columns)
+    if not tta4.empty:
+        tta4["case_id"] = tta4["case_id"].astype(str)
+        tta4 = tta4.set_index("case_id").reindex(table["case_id"].astype(str))
+        fallbacks = {
+            "map_entropy_roi_tta4": "entropy_mean_roi",
+            "map_variance_roi_tta4": "variance_mean_roi",
+            "tta4_view_pairwise_dice": "view_pairwise_dice",
+        }
+        filled: list[str] = []
+        for target, source in fallbacks.items():
+            if source not in tta4.columns:
+                continue
+            values = tta4[source].astype(float).to_numpy()
+            if target not in table.columns:
+                table[target] = np.nan
+            current = table[target].astype(float).to_numpy()
+            updated = np.where(np.isfinite(current), current, values)
+            table[target] = updated
+            if np.isfinite(values).any():
+                filled.append(f"{target} <- csv {source}")
+        area = _csv_voxel_area(averaged, "tta4")
+        if not area.empty:
+            values = area.reindex(table["case_id"].astype(str)).to_numpy(dtype=float)
+            if "pred_area_px" not in table.columns:
+                table["pred_area_px"] = np.nan
+            current = table["pred_area_px"].astype(float).to_numpy()
+            table["pred_area_px"] = np.where(np.isfinite(current), current, values)
+            if np.isfinite(values).any():
+                filled.append("pred_area_px <- csv pred_volume_mm3 / voxel volume")
+        if filled:
+            notes.append(
+                "map-derived descriptors replaced by the per-case CSV columns where the "
+                "evaluation wrote an equivalent (" + "; ".join(filled) + ")."
+            )
+    if maps_missing:
+        notes.append(
+            f"probability maps present for {maps_used} of {maps_used + maps_missing} cases "
+            "(evaluation.probability_map_cases caps the saved maps); the map-only "
+            "descriptors `one_minus_confidence`, `map_ambiguous_fraction_tta4`, `pred_roi_px` "
+            "and every ensemble column are NaN for the cases without a map, and their rows "
+            "drop out of the predictor tables (`n_used` / `n_undefined` show it)."
+        )
+    for column in ("tta4_view_pairwise_dice", "ensemble3_pairwise_dice"):
+        values = table[column].astype(float).to_numpy()
+        if not np.isfinite(values).any():
+            notes.append(
+                f"`{column}` is undefined for every case: no view-agreement CSV and no map "
+                "(ensembles need at least two seeds)."
+            )
+    return notes
+
 
 
 def _seed_pairwise_dice(maps: Sequence[np.ndarray], threshold: float) -> float:
@@ -914,7 +1034,7 @@ def run_uncertainty_audit(
         _add_comparison(first, second)
     test_table = pd.DataFrame(test_rows)
 
-    notes: list[str] = []
+    notes: list[str] = list(table.attrs.get("notes", ()))
     tta4_failure = table["missed_tta4"] | (table["dice_tta4"] < 0.5)
     failures = table.loc[tta4_failure]
     counts = {

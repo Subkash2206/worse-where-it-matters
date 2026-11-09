@@ -448,3 +448,55 @@ def test_run_uncertainty_audit_reports_aurc_next_to_auroc(tmp_path) -> None:
     assert any("view pairwise Dice unavailable" in note for note in audit["notes"])
     assert {"delta_aurc", "aurc_ci_low", "aurc_p_value"} <= set(audit["tests"].columns)
 
+
+
+def test_build_case_table_survives_capped_maps(tmp_path) -> None:
+    """Maps saved for one case only (evaluation.probability_map_cases) must not raise."""
+    from types import SimpleNamespace
+
+    rows = []
+    for fold in (0, 1):
+        for index in range(2):
+            case = f"case_f{fold}_{index:02d}"
+            for method in ("baseline", "tta2", "tta4", "tta8"):
+                base = {
+                    "run_id": f"run{fold}", "created_utc": "2026-01-01T00:00:00Z",
+                    "config_path": "", "config_hash": "x", "seed": 0,
+                    "dataset": "brats2021", "model": "segresnet", "split": "test",
+                    "fold": fold, "method": method, "aggregator": "mean",
+                    "n_views": {"baseline": 1, "tta2": 2, "tta4": 4, "tta8": 8}[method],
+                    "view_names": "views", "threshold": 0.5, "spacing_mm": "1,1,1",
+                    "case_id": case, "group_id": case, "empty_flag": "both_nonempty",
+                    "missed_detection": 0,
+                }
+                values = {
+                    "dice": 0.6 if method == "baseline" else 0.7, "hd95": 20.0,
+                    "entropy_mean": 0.2, "entropy_mean_roi": 0.3,
+                    "variance_mean": 0.01, "variance_mean_roi": 0.02,
+                    "view_disagreement": 0.05, "view_pairwise_dice": 0.9,
+                    "pred_volume_mm3": 800.0,
+                }
+                for metric, value in values.items():
+                    rows.append({**base, "metric": metric, "value": value})
+    averaged = pd.DataFrame(rows)
+
+    runs = []
+    for fold in (0, 1):
+        map_dir = tmp_path / f"fold{fold}_seed0"
+        map_dir.mkdir()
+        if fold == 0:  # only one case of fold 0 has a saved map
+            np.save(map_dir / "case_f0_00__baseline__mean.npy", np.full((8, 8), 0.9, np.float32))
+            np.save(map_dir / "case_f0_00__tta4__mean.npy", np.full((8, 8), 0.9, np.float32))
+        runs.append(SimpleNamespace(fold=fold, seed=0, map_dir=map_dir))
+
+    table = build_case_table(runs, averaged)
+    assert len(table) == 4
+    notes = " ".join(table.attrs.get("notes", ()))
+    assert "probability maps present for 1 of 4 cases" in notes
+    # descriptors the CSV also carries are filled in for the cases without a map
+    for column in ("map_entropy_roi_tta4", "map_variance_roi_tta4", "tta4_view_pairwise_dice", "pred_area_px"):
+        assert np.isfinite(table[column]).all(), column
+    # genuinely map-only descriptors stay NaN instead of inventing a value
+    for column in ("one_minus_confidence", "map_ambiguous_fraction_tta4", "ensemble3_entropy_roi"):
+        # computed for the one case with a map, NaN for the three without
+        assert int(table[column].isna().sum()) == 3, column

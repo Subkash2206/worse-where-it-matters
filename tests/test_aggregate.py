@@ -255,6 +255,7 @@ def test_aggregate_all_merges_ensemble_with_numeric_csv_ids(toy_dataset_config, 
         runs=[RunFiles(fold=0, seed=0, per_case=csv_path, map_dir=map_dir)],
         metrics=["dice"],
         expected_seeds=(0,),
+        ensemble_min_seeds=1,  # this fixture has a single seed on purpose
         ground_truth=ground_truth,
         output_dir=tmp_path / "aggregate",
         n_bootstrap=200,
