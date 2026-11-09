@@ -174,3 +174,118 @@ def compute_view_uncertainty(
         "per_view_dice_std": dice_std,
         "view_pairwise_dice": mean_pairwise_dice(array, threshold),
     }
+
+
+def _band_torch(mask, band_px: int):
+    """``foreground_band`` in torch: ``band_px`` iterations of a 6-neighbour dilation."""
+    import torch
+    import torch.nn.functional as functional
+
+    out = mask
+    if band_px <= 0 or not bool(out.any()):
+        return out
+    for _ in range(int(band_px)):
+        grown = out
+        for axis in range(out.ndim):
+            for shift in (-1, 1):
+                pad = [0] * (2 * out.ndim)
+                # pad the side the content is shifted *away* from, then crop the opposite
+                # end: left pad + drop last == every voxel moves one step up the axis
+                pad[2 * (out.ndim - 1 - axis) + (0 if shift < 0 else 1)] = 1
+                padded = functional.pad(out[None, None].to(torch.float32), pad)
+                moved = padded[0, 0]
+                index = [slice(None)] * out.ndim
+                index[axis] = slice(0, -1) if shift < 0 else slice(1, None)
+                grown = grown | (moved[tuple(index)] > 0.0)
+        out = grown
+    return out
+
+
+def compute_view_uncertainty_torch(
+    per_view,
+    *,
+    threshold: float = 0.5,
+    boundary_band_px: int = 3,
+) -> dict[str, float]:
+    """The same eight descriptors, computed on the tensor's device (GPU).
+
+    Copy of :func:`compute_view_uncertainty` in torch: the descriptors are reductions over
+    a ``(V, 1, *spatial)`` stack, so doing them on the GPU before the views are moved to
+    the host removes the ~1 s of float64 copies and elementwise work per case and method
+    that a 15-view 240^3 evaluation spent on the CPU.  Values agree with the numpy path to
+    floating-point tolerance (tested).
+    """
+    import torch
+
+    views = per_view.to(torch.float64)
+    if views.ndim < 3:
+        raise ValueError(f"per-view probabilities must have shape (V, C, *spatial), got {tuple(views.shape)}")
+    if views.shape[1] != 1:
+        raise ValueError(
+            f"uncertainty descriptors are defined for single-channel predictions, got "
+            f"{views.shape[1]} channels"
+        )
+    if not bool(torch.isfinite(views).all()):
+        raise ValueError("per-view probabilities contain non-finite values")
+
+    mean_probability = views.mean(dim=0)  # (1, *spatial)
+    probability = mean_probability.clamp(_EPS, 1.0 - _EPS)
+    entropy = -(probability * probability.log() + (1.0 - probability) * (1.0 - probability).log())
+    variance = views.var(dim=0, unbiased=False)
+
+    roi = _band_torch(mean_probability[0] > float(threshold), boundary_band_px)
+    if bool(roi.any()):
+        entropy_roi = float(entropy[0][roi].mean().item())
+        variance_roi = float(variance[0][roi].mean().item())
+    else:
+        entropy_roi = float("nan")
+        variance_roi = float("nan")
+
+    masks = views[:, 0] > float(threshold)  # (V, *spatial) bool
+    n_views = int(masks.shape[0])
+    votes = masks.sum(dim=0)
+    if n_views == 1:
+        disagreement = 0.0
+    else:
+        disagree = (votes > 0) & (votes < n_views)
+        disagreement = float(disagree.to(torch.float64).mean().item())
+
+    flat = masks.reshape(n_views, -1).to(torch.float64)
+    sizes = flat.sum(dim=1)
+    consensus = mean_probability[0].reshape(-1) > float(threshold)
+    consensus_size = consensus.to(torch.float64).sum()
+    intersection = flat @ consensus.to(torch.float64)
+    denominator = sizes + consensus_size
+    scores = torch.where(
+        denominator > 0,
+        2.0 * intersection / denominator.clamp_min(1e-8),
+        torch.ones_like(denominator),
+    )
+    dice_mean = float(scores.mean().item())
+    dice_std = float(scores.std(unbiased=False).item())
+
+    if n_views < 2:
+        pairwise = 1.0
+    else:
+        gram = flat @ flat.T
+        index = torch.arange(n_views, device=gram.device)
+        off_diagonal = index[:, None] != index[None, :]
+        pair_denominator = sizes[:, None] + sizes[None, :]
+        pair_dice = torch.where(
+            pair_denominator > 0,
+            2.0 * gram / pair_denominator.clamp_min(1e-8),
+            torch.ones_like(pair_denominator),
+        )
+        pairwise = float(pair_dice[off_diagonal].mean().item())
+
+    return {
+        "entropy_mean": float(entropy.mean().item()),
+        "variance_mean": float(variance.mean().item()),
+        "entropy_mean_roi": entropy_roi,
+        "variance_mean_roi": variance_roi,
+        "view_disagreement": disagreement,
+        "per_view_dice_mean": dice_mean,
+        "per_view_dice_std": dice_std,
+        "view_pairwise_dice": pairwise,
+    }
+

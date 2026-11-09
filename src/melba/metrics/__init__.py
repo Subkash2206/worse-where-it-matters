@@ -38,6 +38,7 @@ from .surface import (
 from .uncertainty import (
     binarized_views,
     compute_view_uncertainty,
+    compute_view_uncertainty_torch,
     foreground_band,
     mean_pairwise_dice,
     per_view_consensus_dice,
@@ -62,6 +63,7 @@ __all__ = [
     "check_pair",
     "compute_case_metrics",
     "compute_view_uncertainty",
+    "compute_view_uncertainty_torch",
     "confusion_counts",
     "dice",
     "empty_flag",

@@ -65,7 +65,84 @@ def _pair(
     return prediction, target
 
 
-def test_bundle_equals_the_individual_metric_functions() -> None:
+def test_torch_uncertainty_matches_the_numpy_path() -> None:
+    """The GPU reduction must reproduce the numpy descriptors (CPU run here)."""
+    import torch
+
+    from melba.metrics import compute_view_uncertainty, compute_view_uncertainty_torch
+    from melba.metrics.uncertainty import _band_torch, foreground_band
+
+    rng = np.random.default_rng(7)
+    views = rng.random((4, 1, 12, 14, 10), dtype=np.float32)
+    views[:, :, 3:7, 4:9, 3:8] = np.clip(
+        views[:, :, 3:7, 4:9, 3:8] + 0.5, 0.0, 1.0
+    )  # a foreground blob, so the ROI band is not empty
+
+    numpy_values = compute_view_uncertainty(views, threshold=0.5, boundary_band_px=2)
+    torch_values = compute_view_uncertainty_torch(
+        torch.from_numpy(views), threshold=0.5, boundary_band_px=2
+    )
+    assert set(numpy_values) == set(torch_values)
+    for name, value in numpy_values.items():
+        assert torch_values[name] == pytest.approx(value, rel=1e-9, abs=1e-12), name
+
+    # the ROI band itself is the same voxel set as scipy's dilation
+    mask = np.zeros((9, 11, 7), dtype=bool)
+    mask[4, 5, 3] = True
+    band_numpy = foreground_band(mask, 3)
+    band_torch = _band_torch(torch.from_numpy(mask), 3).numpy()
+    np.testing.assert_array_equal(band_torch, band_numpy)
+
+
+def test_torch_uncertainty_single_view_agrees_with_numpy() -> None:
+    import torch
+
+    from melba.metrics import compute_view_uncertainty, compute_view_uncertainty_torch
+
+    rng = np.random.default_rng(3)
+    views = rng.random((1, 1, 8, 9, 10), dtype=np.float32)
+    numpy_values = compute_view_uncertainty(views)
+    torch_values = compute_view_uncertainty_torch(torch.from_numpy(views))
+    assert torch_values["view_pairwise_dice"] == 1.0
+    assert torch_values["view_disagreement"] == 0.0
+    for name, value in numpy_values.items():
+        assert torch_values[name] == pytest.approx(value, rel=1e-9, abs=1e-12), name
+
+
+def test_predict_per_view_tensor_matches_the_numpy_wrapper() -> None:
+    """The tensor variant is what the runner uses; it must equal the numpy one."""
+    import torch
+
+    from melba.inference import predict_per_view, predict_per_view_tensor, TTAMethod
+    from melba.transforms import build_views
+
+    torch.manual_seed(0)
+    model = torch.nn.Sequential(
+        torch.nn.Conv2d(3, 1, kernel_size=3, padding=1), torch.nn.Sigmoid()
+    ).eval()
+    method = TTAMethod(
+        name="tta2",
+        views=tuple(
+            build_views(
+                [
+                    {"name": "identity", "ops": []},
+                    {"name": "flip_h", "ops": [{"type": "flip", "axes": ["h"]}]},
+                ]
+            )
+        ),
+        aggregator="mean",
+    )
+    image = torch.randn(1, 3, 16, 18)
+    tensor = predict_per_view_tensor(
+        model, image, torch.device("cpu"), method, activation="none", amp=False
+    )
+    array = predict_per_view(
+        model, image, torch.device("cpu"), method, activation="none", amp=False
+    )
+    assert isinstance(tensor, torch.Tensor)
+    assert tuple(tensor.shape) == tuple(array.shape)
+    np.testing.assert_array_equal(tensor.numpy(), array)
+
     prediction, target = _pair()
     settings = MetricSettings(
         names=("hd", "hd95", "hd95_pooled", "assd", "boundary_f1"), connectivity=1

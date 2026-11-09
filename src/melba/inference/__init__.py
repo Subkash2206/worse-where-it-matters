@@ -10,6 +10,7 @@ from .tta import (
     logits_to_probabilities,
     methods_from_config,
     predict_per_view,
+    predict_per_view_tensor,
     predict_probabilities,
     predict_probabilities_for_methods,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "logits_to_probabilities",
     "methods_from_config",
     "predict_per_view",
+    "predict_per_view_tensor",
     "predict_probabilities",
     "predict_probabilities_for_methods",
 ]

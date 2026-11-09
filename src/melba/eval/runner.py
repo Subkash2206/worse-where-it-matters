@@ -32,12 +32,14 @@ from melba.inference import (
     aggregate_probabilities,
     methods_from_config,
     predict_per_view,
+    predict_per_view_tensor,
 )
 from melba.inference.sliding import build_sliding_window
 from melba.metrics import (
     MetricSettings,
     compute_case_metrics,
     compute_view_uncertainty,
+    compute_view_uncertainty_torch,
     grid_diagonal_mm,
 )
 from melba.models import build_model, checkpoint_sha256, has_mc_dropout, load_checkpoint
@@ -387,7 +389,7 @@ def run_evaluation(
                     _synchronize(device)
                     _reset_peak_memory(device)
                     started = time.perf_counter()
-                view_probabilities = predict_per_view(
+                view_tensor = predict_per_view_tensor(
                     model,
                     image,
                     device,
@@ -404,11 +406,29 @@ def run_evaluation(
                     latency_ms = float("nan")
                     peak_memory_mb = float("nan")
 
-                if view_probabilities.shape[1] != 1:
+                if view_tensor.shape[1] != 1:
                     raise ConfigError(
                         "The evaluation runner expects single-channel (binary) predictions; "
-                        f"got {view_probabilities.shape[1]} channels for method '{method.name}'."
+                        f"got {view_tensor.shape[1]} channels for method '{method.name}'."
                     )
+                # Uncertainty is a set of reductions over the view stack: do them on the
+                # device (eight scalars cross the bus) instead of copying 15 float64 views
+                # to the host first.  Only usable when the views already live on the
+                # reference grid, which is the normal case; otherwise the host copy below
+                # is resampled first and the numpy path is used.
+                gpu_uncertainty = None
+                if metric_settings.uncertainty_names and (
+                    device.type == "cuda"
+                    and tuple(view_tensor.shape[2:]) == tuple(target.shape)
+                ):
+                    gpu_uncertainty = compute_view_uncertainty_torch(
+                        view_tensor,
+                        threshold=threshold,
+                        boundary_band_px=boundary_band_px,
+                    )
+                view_probabilities = view_tensor.cpu().numpy()
+                del view_tensor
+
                 # Every view is mapped back onto the native reference grid before
                 # aggregation, so quality metrics and uncertainty share a geometry.
                 native_views = np.stack(
@@ -436,11 +456,16 @@ def run_evaluation(
                     settings=metric_settings,
                     penalty_shape=sample.get("original_size"),
                 )
-                uncertainty = compute_view_uncertainty(
-                    native_views[:, None],
-                    threshold=threshold,
-                    boundary_band_px=boundary_band_px,
-                )
+                if gpu_uncertainty is not None:
+                    uncertainty = gpu_uncertainty
+                elif metric_settings.uncertainty_names:
+                    uncertainty = compute_view_uncertainty(
+                        native_views[:, None],
+                        threshold=threshold,
+                        boundary_band_px=boundary_band_px,
+                    )
+                else:
+                    uncertainty = {}
 
                 values: dict[str, float] = {
                     name: metrics[name] for name in metric_settings.gt_names

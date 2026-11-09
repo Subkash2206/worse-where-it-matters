@@ -156,7 +156,7 @@ def aggregate_probabilities(stacked: np.ndarray, aggregator: str = "mean") -> np
     raise ValueError(f"Unknown aggregator {aggregator!r}; expected one of {list(AGGREGATORS)}")
 
 
-def predict_per_view(
+def predict_per_view_tensor(
     model: torch.nn.Module,
     image: torch.Tensor,
     device: torch.device,
@@ -165,8 +165,12 @@ def predict_per_view(
     activation: str = "sigmoid",
     amp: bool = True,
     sliding_window: dict[str, Any] | None = None,
-) -> np.ndarray:
-    """Return the *individual* view probabilities of a TTA method.
+) -> torch.Tensor:
+    """Return the *individual* view probabilities as a tensor on ``device``.
+
+    Same computation as :func:`predict_per_view`, but the ``(n_views, C, *spatial)`` stack
+    stays on the compute device, so the per-view uncertainty descriptors can be reduced
+    there (they are only ever eight scalars) before the views are copied to the host.
 
     Parameters
     ----------
@@ -205,7 +209,7 @@ def predict_per_view(
     original_shape = tuple(image.shape[1:])  # (C, *spatial) before any view
     spatial_shape = tuple(image.shape[2:])
     use_amp = amp_is_enabled(amp, device)
-    predictions: list[np.ndarray] = []
+    predictions: list[torch.Tensor] = []
     stochastic = bool(getattr(method, "stochastic", False))
     if stochastic:
         # Dropout on, BatchNorm untouched: the model stays in eval() mode, so the BN
@@ -239,12 +243,38 @@ def predict_per_view(
                         f"Inverse of view {view.name!r} produced spatial shape "
                         f"{tuple(restored.shape[1:])}, expected {spatial_shape}"
                     )
-                predictions.append(restored.detach().cpu().numpy())
+                predictions.append(restored.detach())
     finally:
         if stochastic:
             disable_mc_dropout(model)
 
-    return np.stack(predictions, axis=0).astype(np.float32)
+    return torch.stack(predictions, dim=0).to(torch.float32)
+
+
+def predict_per_view(
+    model: torch.nn.Module,
+    image: torch.Tensor,
+    device: torch.device,
+    method: TTAMethod,
+    *,
+    activation: str = "sigmoid",
+    amp: bool = True,
+    sliding_window: dict[str, Any] | None = None,
+) -> np.ndarray:
+    """Per-view probabilities as a numpy array (host copy of the tensor version)."""
+    return (
+        predict_per_view_tensor(
+            model,
+            image,
+            device,
+            method,
+            activation=activation,
+            amp=amp,
+            sliding_window=sliding_window,
+        )
+        .cpu()
+        .numpy()
+    )
 
 
 def predict_probabilities(
