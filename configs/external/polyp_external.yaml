@@ -1,0 +1,108 @@
+# -----------------------------------------------------------------------------
+# External polyp evaluation (MIDL 2027 external validation).
+#
+# The three datasets are read *where they live* and are never written to:
+#
+#   python scripts/validate_external.py --config configs/external/polyp_external.yaml
+#   python scripts/evaluate_external.py --config configs/external/polyp_external.yaml \
+#       --models cvc_clinicdb/unet_resnet50 cvc_clinicdb/swinunetr_2d \
+#       --folds 0 1 2 3 4 --seeds 0 1 2
+#
+# `dataset.kind: external_polyp` selects the loader in melba/data/polyp_external.py;
+# everything else (model, TTA methods, metrics, normalisation) is inherited from the
+# internal CVC-ClinicDB config, so internal and external numbers come from the same code.
+#
+# Deliberately NOT used: TestDataset/CVC-300, TestDataset/CVC-ClinicDB (they overlap the
+# training data) and TestDataset/Kvasir (overlaps Kvasir-SEG).
+# -----------------------------------------------------------------------------
+defaults:
+  - ../cvc_clinicdb/unet_resnet50.yaml
+
+experiment:
+  name: external_polyp
+  description: "External polyp validation: Kvasir-SEG, CVC-ColonDB, ETIS-LaribPolypDB"
+
+dataset:
+  kind: external_polyp
+  name: kvasir_seg               # overridden per external dataset by the scripts
+  root: .                        # absolute paths below, resolved as given
+  images_dir: C:/Users/subka/Documents/datasets/polyp/Kvasir-SEG/images
+  masks_dir: C:/Users/subka/Documents/datasets/polyp/Kvasir-SEG/masks
+  # every extension the three collections use; images and masks may differ
+  image_extensions: [.jpg, .jpeg, .png, .tif, .tiff, .bmp]
+  image_size: [352, 352]         # exactly the internal training input size
+  in_channels: 3
+  num_classes: 1
+  # null = decide per dataset from the values (> 0 for a 0/1 mask, 127 otherwise);
+  # the threshold actually used is reported by scripts/validate_external.py
+  mask_threshold: null
+  # no calibrated spacing in any of the three collections: distances are in pixels
+  spacing_mm: [1.0, 1.0]
+  normalization:
+    kind: imagenet
+
+external:
+  # read-only roots, one entry per external dataset
+  datasets:
+    kvasir_seg:
+      label: "Kvasir-SEG"
+      images_dir: C:/Users/subka/Documents/datasets/polyp/Kvasir-SEG/images
+      masks_dir: C:/Users/subka/Documents/datasets/polyp/Kvasir-SEG/masks
+    cvc_colondb:
+      label: "CVC-ColonDB"
+      images_dir: C:/Users/subka/Documents/datasets/polyp/TestDataset/CVC-ColonDB/images
+      masks_dir: C:/Users/subka/Documents/datasets/polyp/TestDataset/CVC-ColonDB/masks
+    etis_larib:
+      label: "ETIS-LaribPolypDB"
+      images_dir: C:/Users/subka/Documents/datasets/polyp/TestDataset/ETIS-LaribPolypDB/images
+      masks_dir: C:/Users/subka/Documents/datasets/polyp/TestDataset/ETIS-LaribPolypDB/masks
+
+metrics:
+  names:
+    - dice
+    - jaccard
+    - precision
+    - recall
+    - hd
+    - hd95
+    - hd95_pooled
+    - assd
+    - boundary_f1
+    - pred_volume_mm3
+    - entropy_mean
+    - variance_mean
+    - entropy_mean_roi
+    - variance_mean_roi
+    - view_disagreement
+    - per_view_dice_mean
+    - per_view_dice_std
+    - view_pairwise_dice
+  hd_percentile: 95.0
+  connectivity: 1
+  boundary_tolerance_mm: 2.0
+  empty_policy: nan
+
+evaluation:
+  split: test
+  output_dir: results/external_${dataset.name}/evaluation
+  write_summary: true
+  # ten cases per dataset keep their float16 maps (figures only), not per run
+  save_probability_maps: false
+  probability_map_methods: [baseline, tta4]
+  probability_map_cases: 10
+  probability_map_case_seed: 0
+  emit_penalized_metrics: true
+  uncertainty_boundary_band_px: 3
+
+runtime:
+  num_workers: 0
+  progress: false
+
+stats:
+  # one image = one independent unit (these collections have no video structure)
+  unit: group
+  primary_test: wilcoxon
+  correction: holm
+  n_bootstrap: 10000
+  bootstrap_seed: 0
+  output_dir: results/external_${dataset.name}/stats

@@ -219,8 +219,27 @@ def build_dataset(
             use_cache=bool(section.get("use_cache", False)),
             cache_dir=config.resolve(str(section.get("cache_dir", "cache/brats2021_pre"))),
         )
+    kind = str(config.get("dataset.kind", "") or "").strip().lower()
+    if kind == "external_polyp" or name == "external_polyp":
+        from .polyp_external import ExternalPolypDataset, discover_external_items
+
+        if train:
+            raise ConfigError(
+                "external polyp datasets are evaluation-only: they must never be trained on"
+            )
+        raw_threshold = config.get("dataset.mask_threshold")
+        return ExternalPolypDataset(
+            discover_external_items(config, split=split),
+            image_size=config.require("dataset.image_size"),
+            mask_threshold=None if raw_threshold is None else int(raw_threshold),
+            spacing=config.require("dataset.spacing_mm"),
+            normalization=NormalizationSpec.from_config(config, fold=resolved_fold),
+            fold=resolved_fold,
+            split=split,
+        )
     raise ConfigError(
-        f"Unknown dataset '{name}'. Implemented datasets: cvc_clinicdb, brats2021."
+        f"Unknown dataset '{name}' (kind '{kind}'). Implemented: cvc_clinicdb, brats2021, "
+        "external_polyp (Kvasir-SEG / CVC-ColonDB / ETIS-LaribPolypDB)."
     )
 
 

@@ -475,7 +475,34 @@ python scripts/evaluate.py --config configs/brats2021/segresnet_reduced.yaml \
     --fold 0 --set seed=0
 ```
 
-## Metric definitions
+## External validation and subgroup analysis (MIDL Clinical Translation track)
+
+Three polyp collections are evaluated **read-only, zero-shot** by every checkpoint of the
+internal CVC-ClinicDB grid: Kvasir-SEG (1000), CVC-ColonDB (380) and ETIS-LaribPolypDB
+(196). Paths live in `configs/external/polyp_external.yaml`; the loader
+(`melba/data/polyp_external.py`) pairs images to masks by file stem and fails loudly,
+rejects replicated-grey RGB frames, reports the raw mask value sets, and binarises with the
+threshold actually used (`> 0` for a 0/1 label map, `mask_threshold` otherwise). Frames are
+resized to 352x352 for inference exactly like training, while every metric stays on the
+native grid in pixels.
+
+```bash
+python scripts/validate_external.py  --config configs/external/polyp_external.yaml   # audit
+python scripts/evaluate_external.py  --config configs/external/polyp_external.yaml \
+    --models cvc_clinicdb/unet_resnet50 cvc_clinicdb/swinunetr_2d \
+    --folds 0 1 2 3 4 --seeds 0 1 2        # 90 runs, ~8 GPU-hours
+python scripts/subgroup_analysis.py --models cvc_clinicdb/unet_resnet50 \
+    cvc_clinicdb/swinunetr_2d              # CPU only, existing per-case CSVs
+```
+
+External tables average the metrics **per external case across the 15 checkpoints** before
+any paired test (the models are not extra cases), report the **per-model spread** separately,
+and every row carries `scope: external` so no external number can be mistaken for an internal
+one. The subgroup analysis bins cases by tertiles of the reference lesion area (cutoffs in
+every table), and tests whether the TTA gain differs across bins (Kruskal-Wallis on the
+per-case deltas plus a bootstrap CI of `large - small`).
+
+
 
 Computed per case, on the **native image grid** (predictions are resampled back to
 it), with the spacing from `dataset.spacing_mm`:
