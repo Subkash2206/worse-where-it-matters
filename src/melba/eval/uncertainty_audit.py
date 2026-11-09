@@ -635,6 +635,13 @@ def _csv_voxel_area(averaged: pd.DataFrame, method: str) -> pd.Series:
     wide = _wide(averaged, method, ("pred_volume_mm3",))
     if "pred_volume_mm3" not in wide.columns:
         return pd.Series(dtype=float)
+    wide["case_id"] = wide["case_id"].astype(str)
+    if "spacing_mm" not in averaged.columns:
+        # no spacing column: assume unit voxels (true for the CVC 2-D data and for 1 mm
+        # BraTS volumes), which makes the conversion the identity
+        return pd.Series(
+            wide["pred_volume_mm3"].astype(float).to_numpy(), index=wide["case_id"].to_numpy()
+        )
     spacing = (
         averaged.loc[averaged["method"] == method, ["case_id", "spacing_mm"]]
         .drop_duplicates("case_id")
