@@ -94,7 +94,7 @@ def _external_config(
     model_config_path: Path,
     *,
     dataset_name: str,
-    entry: dict[str, Any],
+    entry: dict[str, Any] | None = None,
     checkpoint: Path,
     fold: int,
     seed: int,
@@ -102,14 +102,28 @@ def _external_config(
     save_maps: bool,
     limit: int | None,
 ) -> Config:
-    """The model's own config, re-pointed at one external dataset and one checkpoint."""
+    """The model's own config, re-pointed at one external dataset and one checkpoint.
+
+    ``entry`` is the ``external.datasets`` mapping of the dataset; it may be omitted when
+    only the *paths of the outputs* are wanted (``_frames_by_model``), in which case the
+    dataset directories fall back to the config's own ``dataset.images_dir``/``masks_dir``
+    - the caller then never touches the images.
+    """
     settings = external.section("dataset")
+    entry = dict(entry or {})
+    images_dir = entry.get("images_dir") or settings.get("images_dir")
+    masks_dir = entry.get("masks_dir") or settings.get("masks_dir")
+    if images_dir is None or masks_dir is None:  # pragma: no cover - guarded by the YAML
+        raise ConfigError(
+            f"external dataset {dataset_name!r} has no images_dir/masks_dir in "
+            "external.datasets nor in dataset.images_dir/dataset.masks_dir"
+        )
     overrides: dict[str, Any] = {
         "experiment.name": f"{dataset_name}__{model_config_path.stem}",
         "dataset.kind": "external_polyp",
         "dataset.name": dataset_name,
-        "dataset.images_dir": entry["images_dir"],
-        "dataset.masks_dir": entry["masks_dir"],
+        "dataset.images_dir": images_dir,
+        "dataset.masks_dir": masks_dir,
         "dataset.image_extensions": settings.get("image_extensions"),
         "dataset.mask_threshold": settings.get("mask_threshold"),
         "dataset.image_size": settings.get("image_size"),
@@ -174,7 +188,12 @@ def _frames_by_model(
     dataset_name: str,
     output_dir: Path,
 ) -> dict[str, pd.DataFrame]:
-    """Read the per-case CSV of every finished run of one external dataset."""
+    """Read the per-case CSV of every finished run of one external dataset.
+
+    ``output_dir`` is the *evaluation* directory the runs wrote into (already checked by the
+    caller); it is used as given, so the paths here are the ones ``main`` used when it ran
+    the evaluations - rebuilding them one level deeper silently found nothing.
+    """
     frames: dict[str, pd.DataFrame] = {}
     for step in steps:
         if step["dataset"] != dataset_name:
@@ -183,15 +202,14 @@ def _frames_by_model(
             external,
             step["model_path"],
             dataset_name=dataset_name,
-            entry={},
             checkpoint=Path("unused"),
             fold=step["fold"],
             seed=step["seed"],
-            output_dir=output_dir / dataset_name / "evaluation",
+            output_dir=output_dir,
             save_maps=False,
             limit=None,
         )
-        path = per_case_path(config, step["fold"], step["seed"], output_dir=output_dir / dataset_name / "evaluation")
+        path = per_case_path(config, step["fold"], step["seed"], output_dir=output_dir)
         if not path.is_file():
             print(f"  missing run (skipped): {path.name}")
             continue

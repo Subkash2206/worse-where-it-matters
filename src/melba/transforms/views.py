@@ -24,6 +24,7 @@ from typing import Any
 from melba.config import ConfigError
 
 from .geometric import Compose, Flip, Identity, InvertibleTransform, Rot90, Transpose, Zoom
+from .intensity import Brightness, Contrast, Gamma, GaussianNoise
 
 __all__ = [
     "AXIS_DIMS",
@@ -39,7 +40,17 @@ __all__ = [
 #: counted from the end of the tensor)
 AXIS_DIMS: dict[str, int] = {"w": -1, "h": -2, "d": -3, "z": -3}
 
-_SUPPORTED_TYPES = ("identity", "flip", "rot90", "transpose", "zoom")
+_SUPPORTED_TYPES = (
+    "identity",
+    "flip",
+    "rot90",
+    "transpose",
+    "zoom",
+    "brightness",
+    "contrast",
+    "gamma",
+    "gaussian_noise",
+)
 
 
 def axis_to_dim(axis: Any) -> int:
@@ -108,6 +119,27 @@ def build_transform(spec: Mapping[str, Any]) -> InvertibleTransform:
         dims = _require_axes(options, expected=2)
         _reject_unknown_options(options, ("axes",), kind)
         return Transpose(dims)
+
+    if kind == "brightness":
+        factor = float(options.pop("factor", 1.0))
+        _reject_unknown_options(options, ("factor",), kind)
+        return Brightness(factor)
+
+    if kind == "contrast":
+        factor = float(options.pop("factor", 1.0))
+        _reject_unknown_options(options, ("factor",), kind)
+        return Contrast(factor)
+
+    if kind == "gamma":
+        value = float(options.pop("gamma", 1.0))
+        _reject_unknown_options(options, ("gamma",), kind)
+        return Gamma(value)
+
+    if kind == "gaussian_noise":
+        sigma = float(options.pop("sigma", 0.02))
+        seed = int(options.pop("seed", 0))
+        _reject_unknown_options(options, ("sigma", "seed"), kind)
+        return GaussianNoise(sigma, seed=seed)
 
     # zoom / multi-scale
     dims = _require_axes(options)

@@ -1,0 +1,26 @@
+# Finish the external polyp evaluation (Part 1) and pool all three datasets.
+#
+# Kvasir-SEG is already complete (15/15 runs per model, 1000/1000 cases each): the script
+# skips a run whose per-case CSV exists, so step 1 only spends GPU time on the 60 missing
+# CVC-ColonDB (380 cases) and ETIS-LaribPolypDB (196) runs.
+name: external_finish
+steps:
+  - name: external_colondb_etis
+    kind: external
+    config: configs/external/polyp_external.yaml
+    models: [cvc_clinicdb/unet_resnet50, cvc_clinicdb/swinunetr_2d]
+    datasets: [cvc_colondb, etis_larib]
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    n_bootstrap: 10000
+    attempts: 2
+
+  - name: external_aggregate
+    kind: external
+    config: configs/external/polyp_external.yaml
+    models: [cvc_clinicdb/unet_resnet50, cvc_clinicdb/swinunetr_2d]
+    datasets: [kvasir_seg, cvc_colondb, etis_larib]
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    n_bootstrap: 10000
+    aggregate_only: true
