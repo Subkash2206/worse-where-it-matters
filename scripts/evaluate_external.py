@@ -182,22 +182,29 @@ def _plan(
     return steps
 
 
+def _eval_dir(dataset_dir: Path, model_config_path: Path) -> Path:
+    """Per-model evaluation directory of one external dataset.
+
+    The per-case file name carries the dataset, the fold and the seed but not the model, so
+    both architectures would write to the same path: the second model was reported as
+    ``exists, skipped`` although it had never run, and the pool then held 15 checkpoints
+    labelled as 30. One directory per model keeps the names unique.
+    """
+    return dataset_dir / model_config_path.stem / "evaluation"
+
+
 def _frames_by_model(
     external: Config,
     steps: list[dict[str, Any]],
     dataset_name: str,
-    output_dir: Path,
+    dataset_dir: Path,
 ) -> dict[str, pd.DataFrame]:
-    """Read the per-case CSV of every finished run of one external dataset.
-
-    ``output_dir`` is the *evaluation* directory the runs wrote into (already checked by the
-    caller); it is used as given, so the paths here are the ones ``main`` used when it ran
-    the evaluations - rebuilding them one level deeper silently found nothing.
-    """
+    """Read the per-case CSV of every finished run of one external dataset."""
     frames: dict[str, pd.DataFrame] = {}
     for step in steps:
         if step["dataset"] != dataset_name:
             continue
+        output_dir = _eval_dir(dataset_dir, step["model_path"])
         config = _external_config(
             external,
             step["model_path"],
@@ -344,6 +351,8 @@ def main(argv: list[str] | None = None) -> int:
         for position, step in enumerate(steps):
             if step["dataset"] != dataset_name:
                 continue
+            eval_dir = _eval_dir(dataset_dir, step["model_path"])
+            eval_dir.mkdir(parents=True, exist_ok=True)
             # the ten saved maps belong to the first run of the dataset, not to all fifteen
             save_maps = bool(external.get("evaluation.probability_map_cases")) and position == 0
             config = _external_config(
@@ -354,12 +363,12 @@ def main(argv: list[str] | None = None) -> int:
                 checkpoint=step["checkpoint"],
                 fold=step["fold"],
                 seed=step["seed"],
-                output_dir=dataset_dir / "evaluation",
+                output_dir=eval_dir,
                 save_maps=save_maps,
                 limit=args.limit,
             )
             expected = per_case_path(
-                config, step["fold"], step["seed"], output_dir=dataset_dir / "evaluation"
+                config, step["fold"], step["seed"], output_dir=eval_dir
             )
             if args.aggregate_only or (expected.is_file() and not args.force):
                 # resume: the run already wrote its per-case CSV, do not spend GPU time again
@@ -376,7 +385,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             print(f"  -> {result.n_cases} cases -> {result.per_case_csv.name}")
 
-        frames = _frames_by_model(external, steps, dataset_name, dataset_dir / "evaluation")
+        frames = _frames_by_model(external, steps, dataset_name, dataset_dir)
         if not frames:
             print(f"ERROR: no per-case results for {dataset_name}", file=sys.stderr)
             return 2

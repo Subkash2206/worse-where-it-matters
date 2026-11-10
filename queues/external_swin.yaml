@@ -1,0 +1,36 @@
+# -----------------------------------------------------------------------------
+# The genuinely missing external runs: the 45 SwinUNETR checkpoints (15 per dataset).
+#
+# Until today both architectures wrote their per-case CSV to the same path
+# (results/external_<dataset>/evaluation/<dataset>_test_fold<f>_seed<s>_per_case.csv), so every
+# SwinUNETR run was reported as "exists, skipped" while the path in fact held the UNet result:
+# the pool claimed 30 checkpoints but contained the 15 UNet ones twice.  evaluate_external.py now
+# writes one evaluation directory per architecture, so these runs land somewhere distinct, and
+# the aggregate step at the end pools 30 real checkpoints.
+#
+# Waits for the intensity queue (pid file logs/intensity_queue.pid): one GPU job at a time.
+# -----------------------------------------------------------------------------
+name: external_swin
+wait_for_pid_file: logs/intensity_queue.pid
+max_wait_hours: 12
+
+steps:
+  - name: external_swin_runs
+    kind: external
+    config: configs/external/polyp_external.yaml
+    models: [cvc_clinicdb/swinunetr_2d]
+    datasets: [kvasir_seg, cvc_colondb, etis_larib]
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    n_bootstrap: 10000
+    attempts: 2
+
+  - name: external_aggregate_both
+    kind: external
+    config: configs/external/polyp_external.yaml
+    models: [cvc_clinicdb/unet_resnet50, cvc_clinicdb/swinunetr_2d]
+    datasets: [kvasir_seg, cvc_colondb, etis_larib]
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    n_bootstrap: 10000
+    aggregate_only: true
