@@ -58,6 +58,7 @@ from melba.pidfile import LAUNCHER_PROCESS_NAMES, pid_alive, read_pid_file  # no
 
 STEP_KINDS: tuple[str, ...] = (
     "grid",
+    "tta_eval",
     "aggregate",
     "compare",
     "evaluate",
@@ -92,7 +93,9 @@ def load_queue(path: str | Path) -> dict[str, Any]:
             raise ValueError(
                 f"{source}: step '{name}' has kind '{kind}'; expected one of {list(STEP_KINDS)}"
             )
-        if kind in {"grid", "aggregate", "evaluate", "external"} and not step.get("config"):
+        if kind in {"grid", "aggregate", "evaluate", "external", "tta_eval"} and not step.get(
+            "config"
+        ):
             raise ValueError(f"{source}: step '{name}' needs a 'config'")
         if kind == "compare" and len(step.get("configs") or []) < 2:
             raise ValueError(f"{source}: step '{name}' needs at least two 'configs'")
@@ -140,6 +143,33 @@ def step_command(step: Mapping[str, Any], *, python: str = sys.executable) -> li
             values = step.get(key)
             if values:
                 command += [flag, *[str(int(value)) for value in values]]
+        for key, flag in (("treatments", "--treatments"), ("control", "--control")):
+            values = step.get(key)
+            if isinstance(values, str):
+                command += [flag, values]
+            elif values:
+                command += [flag, *[str(value) for value in values]]
+        if step.get("output_dir"):
+            command += ["--output-dir", str(step["output_dir"])]
+        if step.get("n_bootstrap") is not None:
+            command += ["--n-bootstrap", str(int(step["n_bootstrap"]))]
+        return command
+    if kind == "tta_eval":
+        command = [
+            python,
+            "-u",
+            str(_REPO_ROOT / "scripts" / "evaluate_tta.py"),
+            "--config",
+            str(step["config"]),
+        ]
+        for key, flag in (("folds", "--folds"), ("seeds", "--seeds")):
+            values = step.get(key)
+            if values:
+                command += [flag, *[str(int(value)) for value in values]]
+        if step.get("limit") is not None:
+            command += ["--limit", str(int(step["limit"]))]
+        if step.get("force"):
+            command.append("--force")
         return command
     if kind == "evaluate":
         # evaluate-only: re-run the test-set evaluation of a trained fold/seed

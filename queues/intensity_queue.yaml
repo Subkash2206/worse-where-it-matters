@@ -1,0 +1,101 @@
+# -----------------------------------------------------------------------------
+# Intensity TTA on the existing checkpoints (Part 2).  Waits for the external_finish queue
+# (pid file logs/external_finish.pid) so only one GPU job runs at a time.
+#
+#   a. CVC UNet  5 folds x 3 seeds: baseline, tta4, intensity4, intensity8, geo4_int4
+#   b. CVC Swin  5 folds x 3 seeds: same methods
+#   c. BraTS     5 folds, seed 0   : baseline, tta4, intensity4 (per modality)
+#   d. external polyp, UNet only, 15 checkpoints, all three datasets, intensity4
+#      (baseline/tta4 are re-computed inside the same CSVs, into a separate output tree so the
+#       finished external results are never overwritten)
+#   e. aggregates: intensity4/intensity8/geo4_int4 vs baseline and vs geometric tta4
+#
+# Nothing trains: every step evaluates checkpoints an earlier grid produced.
+# -----------------------------------------------------------------------------
+name: intensity_queue
+wait_for_pid_file: logs/external_finish.pid
+max_wait_hours: 8
+
+steps:
+  - name: cvc_unet_tta
+    kind: tta_eval
+    config: configs/cvc_clinicdb/unet_resnet50_intensity_tta.yaml
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+  - name: cvc_unet_vs_baseline
+    kind: aggregate
+    config: configs/cvc_clinicdb/unet_resnet50_intensity_tta.yaml
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    control: baseline
+    treatments: [tta4, intensity4, intensity8, geo4_int4]
+    output_dir: results/agg_intensity_unet_vs_baseline
+    n_bootstrap: 10000
+  - name: cvc_unet_vs_tta4
+    kind: aggregate
+    config: configs/cvc_clinicdb/unet_resnet50_intensity_tta.yaml
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    control: tta4
+    treatments: [intensity4, intensity8, geo4_int4]
+    output_dir: results/agg_intensity_unet_vs_tta4
+    n_bootstrap: 10000
+
+  - name: cvc_swin_tta
+    kind: tta_eval
+    config: configs/cvc_clinicdb/swinunetr_2d_intensity_tta.yaml
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+  - name: cvc_swin_vs_baseline
+    kind: aggregate
+    config: configs/cvc_clinicdb/swinunetr_2d_intensity_tta.yaml
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    control: baseline
+    treatments: [tta4, intensity4, intensity8, geo4_int4]
+    output_dir: results/agg_intensity_swin_vs_baseline
+    n_bootstrap: 10000
+  - name: cvc_swin_vs_tta4
+    kind: aggregate
+    config: configs/cvc_clinicdb/swinunetr_2d_intensity_tta.yaml
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    control: tta4
+    treatments: [intensity4, intensity8, geo4_int4]
+    output_dir: results/agg_intensity_swin_vs_tta4
+    n_bootstrap: 10000
+
+  - name: brats_tta
+    kind: tta_eval
+    config: configs/brats2021/segresnet_intensity_tta.yaml
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0]
+  - name: brats_vs_baseline
+    kind: aggregate
+    config: configs/brats2021/segresnet_intensity_tta.yaml
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0]
+    control: baseline
+    treatments: [tta4, intensity4]
+    output_dir: results/agg_intensity_brats_vs_baseline
+    n_bootstrap: 10000
+  - name: brats_vs_tta4
+    kind: aggregate
+    config: configs/brats2021/segresnet_intensity_tta.yaml
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0]
+    control: tta4
+    treatments: [intensity4]
+    output_dir: results/agg_intensity_brats_vs_tta4
+    n_bootstrap: 10000
+
+  - name: external_intensity4
+    kind: external
+    config: configs/external/polyp_external.yaml
+    models: [cvc_clinicdb/unet_resnet50_intensity4]
+    datasets: [kvasir_seg, cvc_colondb, etis_larib]
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    output_dir: results/external_intensity4
+    n_bootstrap: 10000
+    attempts: 2

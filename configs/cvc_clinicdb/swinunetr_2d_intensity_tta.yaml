@@ -16,6 +16,10 @@ experiment:
   name: cvc_clinicdb_swinunetr_2d_intensity_tta
   description: "SwinUNETR + intensity TTA (intensity4/intensity8/geo4_int4) on the trained folds"
 
+# evaluate the *existing* SwinUNETR grid: the checkpoint pattern keeps the training experiment
+model:
+  checkpoint: checkpoints/cvc_clinicdb_swinunetr_2d/fold{fold}_seed{seed}/best.pt
+
 evaluation:
   output_dir: results/${experiment.name}/evaluation
 

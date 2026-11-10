@@ -19,6 +19,10 @@ experiment:
 evaluation:
   output_dir: results/${experiment.name}/evaluation
 
+# evaluate the *existing* UNet grid: the checkpoint pattern keeps the training experiment
+model:
+  checkpoint: checkpoints/cvc_clinicdb_unet_resnet50/fold{fold}_seed{seed}/best.pt
+
 tta:
   methods:
     - name: baseline

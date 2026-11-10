@@ -10,11 +10,15 @@
 #   geo4_int4   : the four tta4 geometric views x {identity, brightness x1.1}
 # -----------------------------------------------------------------------------
 defaults:
-  - ../brats2021/segresnet_reduced.yaml
+  - segresnet_reduced.yaml
 
 experiment:
   name: brats2021_segresnet_intensity_tta
   description: "BraTS SegResNet 3-D + intensity TTA (per modality, after normalization)"
+
+# evaluate the *existing* reduced grid (5 folds, seed 0) - nothing is retrained
+model:
+  checkpoint: checkpoints/brats2021_segresnet_reduced/fold{fold}_seed{seed}/best.pt
 
 evaluation:
   output_dir: results/${experiment.name}/evaluation
@@ -39,26 +43,4 @@ tta:
         - { name: bright_11, ops: [{ type: brightness, factor: 1.1 }] }
         - { name: contrast_11, ops: [{ type: contrast, factor: 1.1 }] }
         - { name: gamma_125, ops: [{ type: gamma, gamma: 1.25 }] }
-    - name: intensity8
-      aggregator: mean
-      views:
-        - { name: identity, ops: [] }
-        - { name: bright_11, ops: [{ type: brightness, factor: 1.1 }] }
-        - { name: contrast_11, ops: [{ type: contrast, factor: 1.1 }] }
-        - { name: gamma_125, ops: [{ type: gamma, gamma: 1.25 }] }
-        - { name: bright_09, ops: [{ type: brightness, factor: 0.9 }] }
-        - { name: contrast_09, ops: [{ type: contrast, factor: 0.9 }] }
-        - { name: gamma_08, ops: [{ type: gamma, gamma: 0.8 }] }
-        - { name: noise_002, ops: [{ type: gaussian_noise, sigma: 0.02, seed: 0 }] }
-    - name: geo4_int4
-      aggregator: mean
-      views:
-        - { name: identity, ops: [] }
-        - { name: rot180, ops: [{ type: rot90, k: 2, axes: [h, w] }] }
-        - { name: hflip, ops: [{ type: flip, axes: [w] }] }
-        - { name: vflip, ops: [{ type: flip, axes: [h] }] }
-        - { name: identity_b11, ops: [{ type: brightness, factor: 1.1 }] }
-        - { name: rot180_b11, ops: [{ type: rot90, k: 2, axes: [h, w] }, { type: brightness, factor: 1.1 }] }
-        - { name: hflip_b11, ops: [{ type: flip, axes: [w] }, { type: brightness, factor: 1.1 }] }
-        - { name: vflip_b11, ops: [{ type: flip, axes: [h] }, { type: brightness, factor: 1.1 }] }
 

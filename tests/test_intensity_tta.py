@@ -73,15 +73,21 @@ def test_gamma_is_monotone_and_noise_is_deterministic() -> None:
 def test_config_view_sets_have_the_expected_membership(name: str) -> None:
     config = load_config(_REPO_ROOT / CONFIGS[name])
     methods = {method["name"]: method for method in config.get("tta.methods")}
-    assert {"baseline", "tta4", "intensity4", "intensity8", "geo4_int4"} <= set(methods)
+    expected = {"baseline", "tta4", "intensity4"}
+    if name != "brats":  # the 3-D run keeps only intensity4 for budget reasons
+        expected |= {"intensity8", "geo4_int4"}
+    assert expected <= set(methods)
     counts = {
         key: len(build_views(method["views"])) for key, method in methods.items()
     }
     assert counts["baseline"] == 1 and counts["tta4"] == 4
-    assert counts["intensity4"] == 4 and counts["intensity8"] == 8
-    assert counts["geo4_int4"] == 8
+    assert counts["intensity4"] == 4
+    if name != "brats":
+        assert counts["intensity8"] == 8 and counts["geo4_int4"] == 8
     intensity4 = {view.name for view in build_views(methods["intensity4"]["views"])}
     assert intensity4 == {"identity", "bright_11", "contrast_11", "gamma_125"}
+    if name == "brats":
+        return
     intensity8 = {view.name for view in build_views(methods["intensity8"]["views"])}
     assert intensity8 == {
         "identity", "bright_11", "contrast_11", "gamma_125",
