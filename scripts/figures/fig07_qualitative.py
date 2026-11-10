@@ -1,26 +1,29 @@
 """Figure 7 - qualitative grid: which polyps TTA silences, and where it repairs a boundary.
 
-Rows are chosen by a rule, never by eye:
+Rows are chosen by a rule, never by eye, and **every row is drawn with the checkpoint that shows it
+best** (named in the row label) - no checkpoint is fixed in advance:
 
 * **three small polyps from the external collections** (CVC-ColonDB and ETIS-Larib) that the baseline
-  detects and TTA-8 loses.  "Detected" and "missed" are the detection flags of the evaluation: the
-  baseline prediction is non-empty in the majority of the 15 checkpoints and the TTA-8 prediction is
-  empty in the majority of them.  Only cases that the drawn checkpoint
-  (``checkpoints/cvc_clinicdb_unet_resnet50/fold0_seed0/best.pt``) reproduces are eligible, one per
-  collection is taken first, and within that the smallest reference area comes first - so the
-  selection is reproducible instead of hand-picked;
-* **two internal CVC-ClinicDB cases** with the largest TTA-4 Dice increase in that checkpoint's
-  per-case table - the errors TTA repairs.
+  detects and TTA-8 loses.  A case qualifies when the baseline prediction is non-empty in the
+  majority of the 15 checkpoints *and* the TTA-8 prediction is empty in the majority of them.  Among
+  the checkpoints in which TTA-8 really is empty, the row is drawn with the one that gives the
+  baseline its highest Dice, provided that Dice reaches 0.3 (so the "before" panel shows a real, if
+  imperfect, segmentation instead of an empty prediction).  Rows are taken smallest reference area
+  first, at most two from one collection;
+* **two internal CVC-ClinicDB cases** with the largest TTA-4 Dice increase in the seed- and
+  fold-averaged per-case table (the number the paper quotes), each drawn with the checkpoint that
+  gives the case its largest TTA-4 gain among the checkpoints whose baseline Dice reaches 0.3.
 
-Every map is recomputed on the **CPU** with that one checkpoint, ``baseline`` and ``tta8`` views
+Every map is recomputed on the **CPU** with that row's checkpoint, ``baseline`` and ``tta8`` views
 through the same ``predict_per_view -> resample -> aggregate`` path the evaluation uses, so the
-contours and the printed Dice of a row always come from the same forward passes.  Dice is reported
-on the native reference grid, before -> after, next to the row label; the reference contour is the
-dashed line sample in the legend.
+contours and the printed Dice of a row always come from the same forward passes and the same
+checkpoint.  Dice is reported on the native reference grid, before -> after, next to the row label;
+the reference contour is the dashed line sample in the legend.
 """
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -32,111 +35,150 @@ import style  # noqa: E402
 
 sys.path.insert(0, str(style.REPO_ROOT / "src"))
 
-CHECKPOINT = style.REPO_ROOT / "checkpoints" / "cvc_clinicdb_unet_resnet50" / "fold0_seed0" / "best.pt"
 INTERNAL_CONFIG = style.REPO_ROOT / "configs" / "cvc_clinicdb" / "unet_resnet50.yaml"
 EXTERNAL_CONFIG = style.REPO_ROOT / "configs" / "external" / "polyp_external.yaml"
 EXTERNAL_DATASETS = ("cvc_colondb", "etis_larib")
-FOLD = 0
-SEED = 0
 METHODS = ("baseline", "tta8")
 N_EXTERNAL = 3
 N_INTERNAL = 2
 #: a majority of the 15 checkpoints (5 folds x 3 seeds of the internal grid)
 MAJORITY = 0.5
+#: the "before" panel has to show a real, imperfect segmentation, not an empty prediction
+MIN_BASELINE_DICE = 0.3
+#: at most this many drawn rows may come from the same external collection
+MAX_PER_COLLECTION = 2
+CHECKPOINT_TEMPLATE = "checkpoints/cvc_clinicdb_unet_resnet50/fold{fold}_seed{seed}/best.pt"
+_CHECKPOINT_NAME = re.compile(r"fold(?P<fold>\d+)_seed(?P<seed>\d+)_per_case\.csv$")
 
 
+def checkpoint_path(fold: int, seed: int) -> Path:
+    """Checkpoint file of one grid point."""
+    return style.REPO_ROOT / CHECKPOINT_TEMPLATE.format(fold=int(fold), seed=int(seed))
 
-def _external_candidates(key: str) -> pd.DataFrame:
-    """Detection of every case in one external collection, over the 15 checkpoints.
 
-    ``detected`` is the share of checkpoints whose baseline prediction is non-empty, ``tta8_missed``
-    the share whose TTA-8 prediction is empty, and ``drawn_*`` the same two flags for the checkpoint
-    the maps are actually drawn with.
+def _grid_table(directory: Path) -> pd.DataFrame:
+    """Per (case, checkpoint, method) Dice and detection flag of one evaluation directory.
+
+    The fold and the seed are read back from the per-case file names, so every row can be tied to
+    the checkpoint that produced it - which is what the drawing rule needs.
     """
-    directory = style.RESULTS / f"external_{key}" / "evaluation"
-    frames = [
-        pd.read_csv(path, usecols=["case_id", "method", "metric", "missed_detection"])
-        for path in sorted(directory.glob("*_per_case.csv"))
-    ]
-    drawn_path = directory / f"{key}_test_fold{FOLD}_seed{SEED}_per_case.csv"
-    if not frames or not drawn_path.is_file():
+    frames = []
+    for path in sorted(directory.glob("*_per_case.csv")):
+        match = _CHECKPOINT_NAME.search(path.name)
+        if match is None:
+            continue
+        frame = pd.read_csv(path, usecols=["case_id", "method", "metric", "value", "missed_detection"])
+        frame = frame.loc[(frame["metric"] == "dice") & (frame["method"].isin(METHODS + ("tta4",)))]
+        frames.append(
+            frame.assign(
+                case_id=frame["case_id"].astype(str),
+                fold=int(match.group("fold")),
+                seed=int(match.group("seed")),
+            )
+        )
+    if not frames:
         return pd.DataFrame()
-    frame = pd.concat(frames, ignore_index=True)
-    frame = frame.loc[(frame["metric"] == "dice") & (frame["method"].isin(METHODS))].copy()
-    frame["case_id"] = frame["case_id"].astype(str)
-    frame["missed"] = pd.to_numeric(frame["missed_detection"], errors="coerce")
-    share = frame.groupby(["case_id", "method"])["missed"].mean().unstack("method")
-    drawn = pd.read_csv(drawn_path, usecols=["case_id", "method", "metric", "missed_detection"])
-    drawn = drawn.loc[(drawn["metric"] == "dice") & (drawn["method"].isin(METHODS))].copy()
-    drawn["case_id"] = drawn["case_id"].astype(str)
-    drawn = drawn.pivot_table(index="case_id", columns="method", values="missed_detection")
-    sizes = pd.read_csv(
-        style.RESULTS / "external_by_model" / f"sizes_{key}.csv", usecols=["case_id", "gt_pixels"]
+    table = pd.concat(frames, ignore_index=True)
+    wide = table.pivot_table(
+        index=["case_id", "fold", "seed"], columns="method", values=["value", "missed_detection"]
     )
-    sizes["case_id"] = sizes["case_id"].astype(str)
-    table = pd.DataFrame(
-        {
-            "dataset": key,
-            "case_id": share.index,
-            "detected": 1.0 - share["baseline"].to_numpy(),
-            "tta8_missed": share["tta8"].to_numpy(),
-            "drawn_detected": [
-                1.0 - float(drawn.loc[case, "baseline"]) if case in drawn.index else float("nan")
-                for case in share.index
-            ],
-            "drawn_tta8_missed": [
-                float(drawn.loc[case, "tta8"]) if case in drawn.index else float("nan")
-                for case in share.index
-            ],
-        }
-    )
-    return table.merge(sizes, on="case_id", how="left")
+    wide.columns = [f"{method}_{field}" for field, method in wide.columns]
+    return wide.reset_index()
 
 
 def select_external(count: int = N_EXTERNAL) -> list[dict]:
-    """The documented rule: majority transition, drawn-checkpoint check, smallest area first."""
-    tables = [_external_candidates(key) for key in EXTERNAL_DATASETS]
-    tables = [table for table in tables if not table.empty]
-    if not tables:
-        return []
-    table = pd.concat(tables, ignore_index=True)
-    rule = table.loc[(table["detected"] >= MAJORITY) & (table["tta8_missed"] > MAJORITY)]
-    reproduced = rule.loc[(rule["drawn_detected"] >= 1.0) & (rule["drawn_tta8_missed"] > MAJORITY)]
-    candidates = (reproduced if len(reproduced) >= count else rule).sort_values("gt_pixels")
+    """External misses, each drawn with the checkpoint that shows it best.
+
+    Rule: a case qualifies when the baseline prediction is non-empty in the majority of the 15
+    checkpoints *and* the TTA-8 prediction is empty in the majority of them.  Among the checkpoints
+    in which TTA-8 really is empty, the row is drawn with the one that gives the baseline its
+    highest Dice, provided that Dice reaches ``MIN_BASELINE_DICE`` - otherwise the "before" panel
+    would be an empty prediction.  Rows are taken smallest reference first, at most
+    ``MAX_PER_COLLECTION`` from one collection.
+    """
+    candidates: list[dict] = []
+    for key in EXTERNAL_DATASETS:
+        wide = _grid_table(style.RESULTS / f"external_{key}" / "evaluation")
+        if wide.empty:
+            continue
+        share = wide.groupby("case_id").agg(
+            detected=("baseline_missed_detection", lambda values: 1.0 - float(values.mean())),
+            tta8_missed=("tta8_missed_detection", "mean"),
+        )
+        rule = share.loc[(share["detected"] >= MAJORITY) & (share["tta8_missed"] > MAJORITY)]
+        sizes = pd.read_csv(
+            style.RESULTS / "external_by_model" / f"sizes_{key}.csv", usecols=["case_id", "gt_pixels"]
+        )
+        sizes["case_id"] = sizes["case_id"].astype(str)
+        for case_id in rule.index:
+            empty = wide.loc[(wide["case_id"] == case_id) & (wide["tta8_missed_detection"] > MAJORITY)]
+            if empty.empty:
+                continue
+            best = empty.sort_values("baseline_value", ascending=False).iloc[0]
+            if float(best["baseline_value"]) < MIN_BASELINE_DICE:
+                continue
+            size = sizes.loc[sizes["case_id"] == str(case_id), "gt_pixels"]
+            candidates.append(
+                {
+                    "dataset": key,
+                    "case_id": str(case_id),
+                    "fold": int(best["fold"]),
+                    "seed": int(best["seed"]),
+                    "baseline_dice": float(best["baseline_value"]),
+                    "detected": float(rule.loc[case_id, "detected"]),
+                    "tta8_missed": float(rule.loc[case_id, "tta8_missed"]),
+                    "gt_pixels": float(size.iloc[0]) if not size.empty else float("nan"),
+                }
+            )
     chosen: list[dict] = []
-    for key in EXTERNAL_DATASETS:  # at least one case per collection
-        block = candidates.loc[candidates["dataset"] == key]
-        if not block.empty:
-            chosen.append(block.iloc[0].to_dict())
-    for _, row in candidates.iterrows():
+    per_collection: dict[str, int] = {}
+    for item in sorted(candidates, key=lambda row: row["gt_pixels"]):
         if len(chosen) >= count:
             break
-        taken = {(item["dataset"], str(item["case_id"])) for item in chosen}
-        if (row["dataset"], str(row["case_id"])) not in taken:
-            chosen.append(row.to_dict())
-    return sorted(chosen[:count], key=lambda item: float(item["gt_pixels"]))
+        if per_collection.get(item["dataset"], 0) >= MAX_PER_COLLECTION:
+            continue
+        per_collection[item["dataset"]] = per_collection.get(item["dataset"], 0) + 1
+        chosen.append(item)
+    return chosen
 
 
 def select_internal(count: int = N_INTERNAL) -> list[dict]:
-    """The cases with the largest TTA-4 Dice increase in the drawn checkpoint's table."""
-    path = (
-        style.RESULTS
-        / "cvc_clinicdb_unet_resnet50"
-        / "evaluation"
-        / f"cvc_clinicdb_test_fold{FOLD}_seed{SEED}_per_case.csv"
+    """Internal repair cases: grid-level TTA-4 gain, drawn at that case's best checkpoint.
+
+    The ranking uses the seed- and fold-averaged per-case table (the number the paper quotes), and
+    each row is drawn with the checkpoint that gives the case its largest TTA-4 gain among the
+    checkpoints whose baseline Dice reaches ``MIN_BASELINE_DICE`` - the same "the before panel must
+    show a real segmentation" floor as the external rows.
+    """
+    aggregate = pd.read_csv(
+        style.RESULTS / "aggregate_cvc_clinicdb_unet_resnet50" / "uncertainty_audit_per_case.csv",
+        usecols=["case_id", "dice_baseline", "dice_tta4"],
     )
-    frame = pd.read_csv(path, usecols=["case_id", "method", "metric", "value"])
-    frame = frame.loc[frame["metric"] == "dice"]
-    wide = frame.pivot_table(index="case_id", columns="method", values="value")
-    delta = (wide["tta4"] - wide["baseline"]).sort_values(ascending=False)
-    return [
-        {
-            "case_id": str(case),
-            "baseline": float(wide.loc[case, "baseline"]),
-            "tta4": float(wide.loc[case, "tta4"]),
-        }
-        for case in delta.index[:count]
-    ]
+    aggregate["case_id"] = aggregate["case_id"].astype(str)
+    aggregate["gain"] = aggregate["dice_tta4"] - aggregate["dice_baseline"]
+    wide = _grid_table(style.RESULTS / "cvc_clinicdb_unet_resnet50" / "evaluation")
+    rows: list[dict] = []
+    for _, case in aggregate.sort_values("gain", ascending=False).iterrows():
+        if len(rows) >= count:
+            break
+        block = wide.loc[wide["case_id"] == case["case_id"]]
+        block = block.loc[block["baseline_value"] >= MIN_BASELINE_DICE]
+        if block.empty:
+            continue
+        best = block.assign(gain=block["tta4_value"] - block["baseline_value"]).sort_values(
+            "gain", ascending=False
+        ).iloc[0]
+        rows.append(
+            {
+                "case_id": str(case["case_id"]),
+                "fold": int(best["fold"]),
+                "seed": int(best["seed"]),
+                "baseline_dice": float(best["baseline_value"]),
+                "tta4": float(best["tta4_value"]),
+                "grid_gain": float(case["gain"]),
+            }
+        )
+    return rows
 
 
 def _dice(prediction: np.ndarray, reference: np.ndarray) -> float:
@@ -169,7 +211,7 @@ def _display_image(path: Path, shape: tuple[int, int]) -> np.ndarray:
 class Inference:
     """Baseline and TTA-8 probability maps of one checkpoint, computed on the CPU."""
 
-    def __init__(self, config_path: Path, overrides: dict) -> None:
+    def __init__(self, config_path: Path, checkpoint: Path, overrides: dict, *, fold: int) -> None:
         import torch
 
         from melba.config import load_config
@@ -180,11 +222,13 @@ class Inference:
 
         self.torch = torch
         self.device = torch.device("cpu")
+        self.checkpoint = Path(checkpoint)
+        self.fold = int(fold)
         self.config = load_config(config_path, overrides)
         self.model = build_model(self.config)
-        load_checkpoint(self.model, CHECKPOINT, self.device)
+        load_checkpoint(self.model, self.checkpoint, self.device)
         self.model.to(self.device).eval()
-        self.dataset = build_dataset(self.config, split="test", fold=FOLD)
+        self.dataset = build_dataset(self.config, split="test", fold=self.fold)
         items = getattr(self.dataset, "items", None)
         self.case_ids = [str(item.case_id) for item in items] if items is not None else []
         self.methods = {method.name: method for method in methods_from_config(self.config)}
@@ -236,8 +280,8 @@ class Inference:
         return result
 
 
-def _external_overrides(key: str) -> dict:
-    """Re-point the external config at one collection and at the drawn checkpoint."""
+def _external_overrides(key: str, fold: int, seed: int) -> dict:
+    """Re-point the external config at one collection, one fold and one seed."""
     from melba.config import load_config
 
     external = load_config(EXTERNAL_CONFIG)
@@ -248,71 +292,88 @@ def _external_overrides(key: str) -> dict:
         "dataset.name": key,
         "dataset.images_dir": entry["images_dir"],
         "dataset.masks_dir": entry["masks_dir"],
-        "model.checkpoint": str(CHECKPOINT),
-        "evaluation.fold": FOLD,
-        "dataset.split.fold": FOLD,
-        "seed": SEED,
+        "model.checkpoint": str(checkpoint_path(fold, seed)),
+        "evaluation.fold": int(fold),
+        "dataset.split.fold": int(fold),
+        "seed": int(seed),
+        "runtime.progress": False,
+    }
+
+
+def _internal_overrides(fold: int, seed: int) -> dict:
+    return {
+        "model.checkpoint": str(checkpoint_path(fold, seed)),
+        "evaluation.fold": int(fold),
+        "dataset.split.fold": int(fold),
+        "seed": int(seed),
         "runtime.progress": False,
     }
 
 
 def main() -> int:
     style.apply()
-    if not CHECKPOINT.is_file():
-        print(f"missing checkpoint {CHECKPOINT}", file=sys.stderr)
-        return 2
     external = select_external()
     internal = select_internal()
     if not external and not internal:
         print("the selection rule found no case to draw", file=sys.stderr)
         return 2
-    print("selected rows (rule, no manual pick):")
+    print("selected rows (rule, no manual pick; CPU maps of the named checkpoint):")
     for item in external:
         print(
             f"  external {item['dataset']:12s} case {str(item['case_id']):>4s} "
             f"reference {float(item['gt_pixels']):7.0f} px  baseline non-empty in "
             f"{float(item['detected']) * 100:5.1f} % of 15 checkpoints, TTA-8 empty in "
-            f"{float(item['tta8_missed']) * 100:5.1f} %"
+            f"{float(item['tta8_missed']) * 100:5.1f} %  -> drawn with fold{item['fold']}_seed{item['seed']} "
+            f"(baseline Dice {float(item['baseline_dice']):.3f} in the table)"
         )
     for item in internal:
         print(
-            f"  internal cvc_clinicdb case {item['case_id']:>4s} "
-            f"Dice {item['baseline']:.3f} -> {item['tta4']:.3f} with TTA-4"
+            f"  internal cvc_clinicdb case {item['case_id']:>4s} grid TTA-4 gain "
+            f"{item['grid_gain']:+.3f} -> drawn with fold{item['fold']}_seed{item['seed']} "
+            f"(Dice {item['baseline_dice']:.3f} -> {item['tta4']:.3f} with TTA-4)"
         )
 
     rows: list[dict] = []
-    engines: dict[str, Inference] = {}
+    engines: dict[tuple, Inference] = {}
     for item in external:
         key = str(item["dataset"])
-        if key not in engines:
-            engines[key] = Inference(EXTERNAL_CONFIG, _external_overrides(key))
-        maps = engines[key].maps(str(item["case_id"]))
+        fold, seed = int(item["fold"]), int(item["seed"])
+        cache_key = (key, fold, seed)
+        if cache_key not in engines:
+            engines[cache_key] = Inference(
+                EXTERNAL_CONFIG,
+                checkpoint_path(fold, seed),
+                _external_overrides(key, fold, seed),
+                fold=fold,
+            )
+        maps = engines[cache_key].maps(str(item["case_id"]))
         rows.append(
             {
                 "label": (
                     f"{style.LABELS[key].replace(' (external)', '')} {item['case_id']}\n"
-                    f"TTA-8 empty in {float(item['tta8_missed']) * 100:.0f} % of 15"
+                    f"fold{fold}_seed{seed}\n"
+                    f"TTA-8 empty {float(item['tta8_missed']) * 15:.0f}/15"
                 ),
                 **maps,
             }
         )
-    engine = Inference(
-        INTERNAL_CONFIG,
-        {
-            "model.checkpoint": str(CHECKPOINT),
-            "evaluation.fold": FOLD,
-            "dataset.split.fold": FOLD,
-            "seed": SEED,
-            "runtime.progress": False,
-        },
-    )
     for item in internal:
-        maps = engine.maps(str(item["case_id"]))
+        fold, seed = int(item["fold"]), int(item["seed"])
+        cache_key = ("cvc_clinicdb", fold, seed)
+        if cache_key not in engines:
+            engines[cache_key] = Inference(
+                INTERNAL_CONFIG,
+                checkpoint_path(fold, seed),
+                _internal_overrides(fold, seed),
+                fold=fold,
+            )
+        maps = engines[cache_key].maps(str(item["case_id"]))
         rows.append(
             {
                 "label": (
                     f"CVC-ClinicDB {item['case_id']}\n"
-                    f"largest TTA-4 gain {item['tta4'] - item['baseline']:+.2f}"
+                    f"fold{fold}_seed{seed}\n"
+                    f"TTA-4 gain {item['grid_gain']:+.2f}"
                 ),
                 **maps,
             }
@@ -339,7 +400,7 @@ def _draw(rows: list[dict]) -> int:
     fig, axes = plt.subplots(
         len(rows), len(columns), figsize=(7.0, 1.55 * len(rows)), squeeze=False
     )
-    fig.subplots_adjust(left=0.12, right=0.995, top=0.955, bottom=0.035, hspace=0.08, wspace=0.03)
+    fig.subplots_adjust(left=0.155, right=0.995, top=0.955, bottom=0.035, hspace=0.08, wspace=0.03)
     for row_index, row in enumerate(rows):
         panels = (
             (None, None),
@@ -389,7 +450,15 @@ def _draw(rows: list[dict]) -> int:
             if row_index == 0:
                 ax.set_title(columns[column_index], fontsize=8)
             if column_index == 0:
-                ax.set_ylabel(row["label"], fontsize=5.5)
+                ax.annotate(
+                    row["label"],
+                    (-0.07, 0.5),
+                    xycoords="axes fraction",
+                    ha="right",
+                    va="center",
+                    fontsize=5.2,
+                    linespacing=1.35,
+                )
                 ax.annotate(
                     f"Dice {row['before']:.2f} -> {row['after']:.2f}",
                     (0.02, 0.02),

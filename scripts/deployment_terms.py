@@ -49,35 +49,45 @@ def _read(path: Path) -> pd.DataFrame:
 
 
 def _tail_rows(directory: Path, key: str, kind: str) -> list[dict[str, Any]]:
-    """Large-boundary failures fixed, misses added and the lesion-free false positives."""
+    """Large-boundary failures fixed, misses added and the lesion-free false positives.
+
+    The baseline row is the reference of the table: zero extra passes, no transition, no failure
+    removed - but it does carry its own false-positive count on the lesion-free patients, which is
+    what the TTA rows are compared against.
+    """
     rows: list[dict[str, Any]] = []
     tail = _read(directory / "tail_metrics.csv")
     detection = _read(directory / "detection_seed_averaged.csv")
     false_positive = _read(directory / "false_positive_seed_averaged.csv")
-    for method in ("tta4", "tta8"):
-        fixed = np.nan
-        if not tail.empty and "delta_hd95_failure_rate_estimate" in tail:
-            row = tail.loc[tail["method"] == method]
-            if not row.empty:
-                fixed = -float(row["delta_hd95_failure_rate_estimate"].iloc[0]) * 1000.0
-        added = np.nan
-        if not detection.empty and method in set(detection["method"]):
-            row = detection.loc[detection["method"] == method].iloc[0]
-            net = float(row.get("nonempty_to_empty", np.nan)) - float(row.get("empty_to_nonempty", np.nan))
-            added = net * 1000.0 / max(float(row["n_cases"]), 1.0)
+    for method in ("baseline", "tta4", "tta8"):
+        fixed = added = 0.0 if method == "baseline" else np.nan
+        false_positives_removed = np.nan
+        if method != "baseline":
+            if not tail.empty and "delta_hd95_failure_rate_estimate" in tail:
+                row = tail.loc[tail["method"] == method]
+                if not row.empty:
+                    fixed = -float(row["delta_hd95_failure_rate_estimate"].iloc[0]) * 1000.0
+            if not detection.empty and method in set(detection["method"]):
+                row = detection.loc[detection["method"] == method].iloc[0]
+                net = float(row.get("nonempty_to_empty", np.nan)) - float(
+                    row.get("empty_to_nonempty", np.nan)
+                )
+                added = net * 1000.0 / max(float(row["n_cases"]), 1.0)
         # raw counts on the lesion-free patients (BraTS is the only collection with empty references)
         lesion_free = np.nan
         false_positives = np.nan
-        false_positives_removed = np.nan
         if not false_positive.empty and method in set(false_positive["method"]):
             row = false_positive.loc[false_positive["method"] == method].iloc[0]
             lesion_free = float(row.get("n_cases", np.nan))
             false_positives = float(row.get("n_false_positive", np.nan))
-            false_positives_removed = float(row.get("fp_to_correct", np.nan)) - float(
-                row.get("correct_to_fp", np.nan)
-            )
+            if method != "baseline":
+                false_positives_removed = float(row.get("fp_to_correct", np.nan)) - float(
+                    row.get("correct_to_fp", np.nan)
+                )
+            else:
+                false_positives_removed = 0.0
         pass_ms = LATENCY_MS_PER_PASS[kind]
-        extra_ms = EXTRA_PASSES[method] * pass_ms
+        extra_ms = (EXTRA_PASSES.get(method, 0)) * pass_ms
         rows.append(
             {
                 "dataset": key,
@@ -111,20 +121,23 @@ def _external_rows() -> list[dict[str, Any]]:
         if baseline.empty:
             continue
         total = float(baseline["n_cases"].iloc[0])
-        for method in ("tta4", "tta8"):
+        for method in ("baseline", "tta4", "tta8"):
             row = block.loc[block["method"] == method]
             if row.empty:
                 continue
             row = row.iloc[0]
-            added = (
-                float(row["cases_became_majority_miss"]) - float(row["cases_left_majority_miss"])
-            ) * 1000.0 / total
+            if method == "baseline":
+                added = 0.0
+            else:
+                added = (
+                    float(row["cases_became_majority_miss"]) - float(row["cases_left_majority_miss"])
+                ) * 1000.0 / total
             # The external tables carry no HD95 failure-rate estimate (the internal aggregate
             # writes one), and the pixel scale differs per collection, so a per-1000 failure count
             # would not be comparable.  Left empty on purpose; the Dice/HD95 deltas are in
             # results/external_by_model.  None of these collections has empty references either,
             # so the false-positive columns stay empty.
-            fixed = np.nan
+            fixed = 0.0 if method == "baseline" else np.nan
             rows.append(
                 {
                     "dataset": dataset,
@@ -135,7 +148,7 @@ def _external_rows() -> list[dict[str, Any]]:
                     "lesion_free_patients": np.nan,
                     "false_positives_on_lesion_free": np.nan,
                     "false_positives_removed": np.nan,
-                    "extra_ms_per_frame": EXTRA_PASSES[method] * LATENCY_MS_PER_PASS["2d"],
+                    "extra_ms_per_frame": EXTRA_PASSES.get(method, 0) * LATENCY_MS_PER_PASS["2d"],
                     "extra_s_per_volume": np.nan,
                     "latency_source": f"{LATENCY_MS_PER_PASS['2d']:.0f} ms per pass (2-D, 352x352)"
                     + ("" if family == "unet_resnet50" else ", SwinUNETR"),
@@ -222,9 +235,25 @@ def main() -> int:
     (OUTPUT / "deployment_terms.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"wrote {OUTPUT / 'deployment_terms.csv'} ({len(table)} rows)")
     print(f"wrote {OUTPUT / 'deployment_terms.md'}")
+    brats = table.loc[table["dataset"] == "brats"].sort_values("method")
+    if not brats.empty:
+        counts = ", ".join(
+            f"{row['method']} {int(row['false_positives_on_lesion_free'])}"
+            for _, row in brats.iterrows()
+            if np.isfinite(row["false_positives_on_lesion_free"])
+        )
+        totals = {
+            int(row["lesion_free_patients"])
+            for _, row in brats.iterrows()
+            if np.isfinite(row["lesion_free_patients"])
+        }
+        print(
+            f"BraTS false positives on the {sorted(totals)[0] if totals else '?'} lesion-free "
+            f"patients: {counts}"
+        )
     for _, row in table.sort_values(["dataset", "method"]).iterrows():
         print(
-            f"  {row['dataset']:12s} {row['method']:4s} latency {_latency_cell(row):18s} "
+            f"  {row['dataset']:12s} {row['method']:8s} latency {_latency_cell(row):18s} "
             f"FP on lesion-free {_fp_cell(row) or '-':8s} removed "
             f"{_number(row['false_positives_removed'], decimals=0) or '-'}"
         )

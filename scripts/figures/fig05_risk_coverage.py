@@ -159,6 +159,7 @@ def _panel(
             fontsize=5.0,
             color="#606060",
         )
+    legend_lines: list[str] = []
     for column, method, label, colour, linestyle, predictor in SIGNALS:
         if column not in table:
             continue
@@ -180,18 +181,23 @@ def _panel(
                 f"not at the base rate {base_rate:.6f} %"
             )
         auroc_value, aurc_value = _audit_values(audit, predictor, DEFINITIONS[definition])
-        ax.plot(
-            retained,
-            rate,
-            color=colour,
-            linestyle=linestyle,
-            label=f"{label}  {_format(auroc_value, aurc_value)}",
+        text = _format(auroc_value, aurc_value)
+        ax.plot(retained, rate, color=colour, linestyle=linestyle, label=f"{label}  {text}")
+        legend_lines.append(
+            f"    {label:30s} AUROC {auroc_value:.4f}  AURC {aurc_value:.4f}   "
+            f"[audit {predictor} / own / {DEFINITIONS[definition]}]   "
+            f"base {base_rate:5.2f} %  first {float(rate[0]):5.2f} %  last {float(rate[-1]):5.2f} %"
         )
-        print(
-            f"{tag:4s} {column:28s} n={failed.size:3d} base={base_rate:5.2f} % "
-            f"first={float(rate[0]):5.2f} % last={float(rate[-1]):5.2f} % "
-            f"{_format(auroc_value, aurc_value)}"
-        )
+        if predictor == "tta4_view_dice_disagreement" and definition == "dice":
+            if abs(auroc_value - 0.865) > 5e-4:
+                raise AssertionError(
+                    "the pairwise view Dice entry for the UNet is no longer AUROC 0.865 but "
+                    f"{auroc_value:.4f}"
+                )
+            legend_lines.append(
+                "      ^ 1 - pairwise view Dice, UNet: AUROC 0.865 confirmed against "
+                "uncertainty_audit_auroc.csv"
+            )
     ax.set_xlim(0, 100)
     # headroom above the highest curve/base rate so the legend never covers a line
     highest = max(
@@ -201,6 +207,9 @@ def _panel(
     ax.set_title(title, loc="left")
     ax.set_xlabel("coverage retained [%]")
     ax.set_ylabel("failure rate [%]")
+    print(f"  legend entries of {title}")
+    for line in legend_lines:
+        print(line)
 
 
 def main() -> int:
