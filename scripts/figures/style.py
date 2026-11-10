@@ -20,14 +20,26 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 FIGURE_DIR = REPO_ROOT / "results" / "figures_paper"
 RESULTS = REPO_ROOT / "results"
 
+#: Okabe-Ito colour-blind-safe palette (the one the whole figure set uses)
+OKABE_ITO = {
+    "black": "#000000",
+    "orange": "#E69F00",
+    "sky": "#56B4E9",
+    "green": "#009E73",
+    "yellow": "#F0E442",
+    "blue": "#0072B2",
+    "vermillion": "#D55E00",
+    "purple": "#CC79A7",
+}
+
 #: one colour per setting; the two internal architectures share the blue family
 PALETTE = {
-    "cvc_unet": "#1f4e79",
-    "cvc_swin": "#2e86c1",
-    "brats": "#7d3c98",
-    "kvasir_seg": "#c0392b",
-    "cvc_colondb": "#e67e22",
-    "etis_larib": "#16a085",
+    "cvc_unet": OKABE_ITO["blue"],
+    "cvc_swin": OKABE_ITO["sky"],
+    "brats": OKABE_ITO["purple"],
+    "kvasir_seg": OKABE_ITO["vermillion"],
+    "cvc_colondb": OKABE_ITO["orange"],
+    "etis_larib": OKABE_ITO["green"],
 }
 MARKERS = {
     "cvc_unet": "o",

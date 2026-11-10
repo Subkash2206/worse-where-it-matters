@@ -24,6 +24,18 @@ SOURCES = (
     ("brats", style.RESULTS / "aggregate_brats2021_segresnet_reduced" / "paired_seed_averaged.csv"),
 )
 EXTERNAL = style.RESULTS / "external_by_model" / "paired.csv"
+#: the CVC-ColonDB and SwinUNETR HD95 curves nearly coincide, so their x positions are nudged
+#: by +/-5 % (the error bars stay on the same scale; the offset is a plotting aid only)
+X_OFFSET = {"cvc_colondb": 0.95, "cvc_swin": 1.05}
+#: legend order: the two internal 2-D models, BraTS, then the three external collections
+_LEGEND_ORDER = {
+    label: position
+    for position, label in enumerate(
+        style.LABELS[key]
+        for key in ("cvc_unet", "cvc_swin", "brats", "kvasir_seg", "cvc_colondb", "etis_larib")
+    )
+}
+
 
 
 def _rows(frame: pd.DataFrame, key: str) -> list[dict]:
@@ -81,13 +93,15 @@ def main() -> int:
         return 2
     import matplotlib.pyplot as plt
 
-    fig, axes = plt.subplots(1, 2, figsize=(7.0, 2.7))
+    fig, axes = plt.subplots(1, 2, figsize=(7.0, 3.0))
+    handles = []
     for ax, metric, label in zip(axes, ("dice", "hd95"), ("Dice change", "relative HD95 change [%]")):
         block = table.loc[table["metric"] == metric]
         for setting, group in block.groupby("setting"):
             group = group.sort_values("views")
-            ax.errorbar(
-                group["views"],
+            offset = X_OFFSET.get(setting, 1.0)
+            line = ax.errorbar(
+                group["views"] * offset,
                 group["delta"],
                 yerr=[group["delta"] - group["low"], group["high"] - group["delta"]],
                 marker=style.MARKERS.get(setting, "o"),
@@ -97,15 +111,37 @@ def main() -> int:
                 elinewidth=0.7,
                 capsize=2,
             )
+            if metric == "dice":
+                handles.append(line)
         ax.axhline(0.0, color="#909090", linewidth=0.7)
         ax.set_xscale("log", base=2)
         ax.set_xticks([1, 2, 4, 8])
         ax.set_xticklabels(["1", "2", "4", "8"])
+        ax.set_xlim(0.9, 8.6)
         ax.set_xlabel("number of TTA views")
         ax.set_ylabel(label)
     axes[0].set_title("(a) Dice", loc="left")
     axes[1].set_title("(b) HD95 (relative)", loc="left")
-    axes[1].legend(loc="lower left", ncol=1)
+    axes[1].annotate(
+        "±5 % x-jitter: ColonDB, SwinUNETR",
+        (0.965, 0.03),
+        xycoords="axes fraction",
+        ha="right",
+        fontsize=5.0,
+        color="#707070",
+    )
+    # one legend for both panels, outside the axes so it cannot cover a curve
+    handles = sorted(handles, key=lambda handle: _LEGEND_ORDER.get(handle.get_label(), 99))
+    fig.legend(
+        handles=handles,
+        labels=[handle.get_label() for handle in handles],
+        loc="upper center",
+        ncol=3,
+        bbox_to_anchor=(0.5, -0.05),
+        fontsize=6.5,
+        columnspacing=1.2,
+        handletextpad=0.5,
+    )
     style.save(fig, "fig01_gain_vs_views")
     return 0
 

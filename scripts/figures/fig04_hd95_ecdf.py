@@ -40,22 +40,37 @@ def main() -> int:
     wide = frame.pivot(index="case_id", columns="method", values="value")
     paired = wide.dropna()
     fig, ax = plt.subplots(figsize=(3.6, 2.8))
-    for method, colour, linestyle in (
-        ("baseline", style.PALETTE["cvc_unet"], "-"),
-        ("tta4", "#e67e22", "-"),
+    percentiles: dict[str, float] = {}
+    # staggered p95 labels: the two lines are only a few pixels apart, so the annotations are
+    # pushed above and below the 0.95 level instead of colliding at the top of the curves
+    label_offsets = {"baseline": (3, 5, "bottom"), "tta4": (3, -12, "top")}
+    for method, colour, linestyle, legend in (
+        ("baseline", style.PALETTE["cvc_unet"], "-", "baseline"),
+        ("tta4", style.OKABE_ITO["vermillion"], "-", "TTA-4"),
     ):
         values = np.sort(paired[method].to_numpy(dtype=float))
         cumulative = np.arange(1, values.size + 1) / values.size
-        ax.step(values, cumulative, where="post", color=colour, linestyle=linestyle, label=f"{method} (n={values.size})")
+        ax.step(values, cumulative, where="post", color=colour, linestyle=linestyle, label=f"{legend} (n={values.size})")
         p95 = float(np.percentile(values, 95))
+        percentiles[method] = p95
         ax.plot([p95, p95], [0.0, 0.95], color=colour, linestyle=":", linewidth=0.8)
+        dx, dy, va = label_offsets[method]
         ax.annotate(
             f"p95 {p95:.0f} px",
             (p95, 0.95),
             textcoords="offset points",
-            xytext=(3, -9),
+            xytext=(dx, dy),
+            va=va,
             fontsize=6,
             color=colour,
+        )
+        print(f"p95 {legend:8s} {p95:6.2f} px (n={values.size})")
+    shift = percentiles["tta4"] - percentiles["baseline"]
+    print(f"p95 shift baseline -> TTA-4: {shift:+.2f} px")
+    if abs(percentiles["baseline"] - 150.0) > 2.0 or abs(percentiles["tta4"] - 147.0) > 2.0:
+        raise AssertionError(
+            "p95 no longer matches the reported 150 -> 147 px: "
+            f"{percentiles['baseline']:.2f} -> {percentiles['tta4']:.2f}"
         )
     ax.axvline(THRESHOLD_PX, color="#909090", linestyle="--", linewidth=0.8)
     ax.annotate("50 px", (THRESHOLD_PX, 0.05), textcoords="offset points", xytext=(3, 0), fontsize=6, color="#606060")
@@ -73,11 +88,12 @@ def main() -> int:
     ax.set_xlabel("HD95 [px]")
     ax.set_ylabel("ECDF")
     ax.set_xlim(0, float(np.percentile(np.concatenate([paired[m] for m in METHODS]), 99.5)))
-    ax.set_ylim(0, 1.0)
-    ax.set_title("CVC-ClinicDB UNet: TTA-4 pulls the tail in")
+    ax.set_ylim(0, 1.06)
+    ax.set_title("TTA-4 shifts moderate errors; the extreme tail stays")
     ax.legend(loc="lower right")
     style.save(fig, "fig04_hd95_ecdf")
     return 0
+
 
 
 if __name__ == "__main__":
