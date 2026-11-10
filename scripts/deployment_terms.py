@@ -12,13 +12,13 @@ benefit and the price sit in one row:
   patients still receive a false-positive prediction under the method
   (``false_positive_seed_averaged.csv``, ``n_false_positive``), and the net fp -> correct minus
   correct -> fp count TTA moves;
-* **extra latency** - the additional forward passes times the measured latency per pass.  The
-  per-run JSON records that timing exists but not the values (they went to the console), so the two
-  measured constants of this project are used: 45 ms per pass for the 2-D polyp models at 352x352
-  and 1750 ms per pass for the 3-D SegResNet at 128^3.  Latency is reported **in ms per frame for
-  the 2-D models and in s per volume for BraTS**, and the ``latency_is_estimated`` column states
-  that it is an estimate (per-pass constant times the number of extra passes), not a measured
-  end-to-end wall clock.
+* **absolute latency** - forward passes per image/volume (baseline 1, TTA-4 4, TTA-8 8) times the
+  measured latency per pass.  The per-run JSON records that timing exists but not the values (they
+  went to the console), so the two measured constants of this project are used: 45 ms per pass for
+  the 2-D polyp models at 352x352 and 1750 ms per pass for the 3-D SegResNet at 128^3.  Latency is
+  reported **in ms per frame for the 2-D models and in s per volume for BraTS**, and the
+  ``latency_is_estimated`` column states that it is an estimate (the per-pass constant times the
+  number of passes), not a measured end-to-end wall clock.
 
 Usage
 -----
@@ -87,7 +87,8 @@ def _tail_rows(directory: Path, key: str, kind: str) -> list[dict[str, Any]]:
             else:
                 false_positives_removed = 0.0
         pass_ms = LATENCY_MS_PER_PASS[kind]
-        extra_ms = (EXTRA_PASSES.get(method, 0)) * pass_ms
+        passes = 1 + EXTRA_PASSES.get(method, 0)
+        latency_ms = passes * pass_ms
         rows.append(
             {
                 "dataset": key,
@@ -98,8 +99,9 @@ def _tail_rows(directory: Path, key: str, kind: str) -> list[dict[str, Any]]:
                 "lesion_free_patients": lesion_free,
                 "false_positives_on_lesion_free": false_positives,
                 "false_positives_removed": false_positives_removed,
-                "extra_ms_per_frame": extra_ms if kind == "2d" else np.nan,
-                "extra_s_per_volume": extra_ms / 1000.0 if kind == "3d" else np.nan,
+                "forward_passes": passes,
+                "latency_ms_per_frame": latency_ms if kind == "2d" else np.nan,
+                "latency_s_per_volume": latency_ms / 1000.0 if kind == "3d" else np.nan,
                 "latency_source": f"{pass_ms:.0f} ms per pass "
                 + ("(3-D SegResNet 128^3)" if kind == "3d" else "(2-D, 352x352)"),
                 "latency_is_estimated": True,
@@ -148,8 +150,10 @@ def _external_rows() -> list[dict[str, Any]]:
                     "lesion_free_patients": np.nan,
                     "false_positives_on_lesion_free": np.nan,
                     "false_positives_removed": np.nan,
-                    "extra_ms_per_frame": EXTRA_PASSES.get(method, 0) * LATENCY_MS_PER_PASS["2d"],
-                    "extra_s_per_volume": np.nan,
+                    "forward_passes": 1 + EXTRA_PASSES.get(method, 0),
+                    "latency_ms_per_frame": (1 + EXTRA_PASSES.get(method, 0))
+                    * LATENCY_MS_PER_PASS["2d"],
+                    "latency_s_per_volume": np.nan,
                     "latency_source": f"{LATENCY_MS_PER_PASS['2d']:.0f} ms per pass (2-D, 352x352)"
                     + ("" if family == "unet_resnet50" else ", SwinUNETR"),
                     "latency_is_estimated": True,
@@ -175,11 +179,11 @@ def _fp_cell(row: pd.Series) -> str:
 
 
 def _latency_cell(row: pd.Series) -> str:
-    """Extra compute in the unit the ``latency_is_estimated`` column refers to."""
-    if np.isfinite(row["extra_s_per_volume"]):
-        return f"{float(row['extra_s_per_volume']):.2f} s per volume"
-    if np.isfinite(row["extra_ms_per_frame"]):
-        return f"{float(row['extra_ms_per_frame']):.0f} ms per frame"
+    """Absolute latency per image/volume, in the unit of that collection."""
+    if np.isfinite(row["latency_s_per_volume"]):
+        return f"{float(row['latency_s_per_volume']):.2f} s per volume"
+    if np.isfinite(row["latency_ms_per_frame"]):
+        return f"{float(row['latency_ms_per_frame']):.0f} ms per frame"
     return ""
 
 
@@ -203,21 +207,23 @@ def main() -> int:
     lines.append(
         "Positive *fixed* and *removed* columns are benefits, positive *misses added* is a cost.  The "
         "false positives are **raw counts on the 33 lesion-free BraTS patients** (only BraTS has "
-        "empty references), not a rate.  The latency column is the *extra* compute of the additional "
-        "forward passes, and it is **estimated** from the measured per-pass latency - see the last "
-        "column and the note below.\n"
+        "empty references), not a rate.  The latency column is the **absolute** cost of one "
+        "image/volume (forward passes x measured per-pass latency), and it is **estimated**, not a "
+        "measured end-to-end wall clock - see the ``passes`` and ``estimated`` columns and the note "
+        "below.\n"
     )
     lines.extend(
         [
-            "| dataset | unit | method | boundary failures fixed | misses added | "
-            "false positives on lesion-free | false positives removed | extra latency | "
+            "| dataset | unit | method | passes | boundary failures fixed | misses added | "
+            "false positives on lesion-free | false positives removed | latency (absolute) | "
             "latency estimated |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     )
     for _, row in table.sort_values(["dataset", "method"]).iterrows():
         lines.append(
             f"| {row['dataset']} | {row['unit']} | {row['method']} | "
+            f"{int(row['forward_passes'])} | "
             f"{_number(row['boundary_failures_fixed_per_1000'])} | "
             f"{_number(row['misses_added_per_1000'])} | "
             f"{_fp_cell(row)} | "
@@ -227,10 +233,11 @@ def main() -> int:
         )
     lines.append("")
     lines.append(
-        "Latency is estimated, not measured end to end: the extra passes of the method times the "
-        "measured per-pass latency ("
+        "Latency is the absolute per-image/per-volume cost (forward passes x per-pass latency) and "
+        "is estimated from the measured per-pass constant ("
         + "; ".join(table["latency_source"].drop_duplicates().tolist())
-        + "). The 3-D value is reported in s per volume, the 2-D values in ms per frame."
+        + "), not measured end to end. The 3-D value is reported in s per volume, the 2-D values in "
+        "ms per frame."
     )
     (OUTPUT / "deployment_terms.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"wrote {OUTPUT / 'deployment_terms.csv'} ({len(table)} rows)")
@@ -253,7 +260,8 @@ def main() -> int:
         )
     for _, row in table.sort_values(["dataset", "method"]).iterrows():
         print(
-            f"  {row['dataset']:12s} {row['method']:8s} latency {_latency_cell(row):18s} "
+            f"  {row['dataset']:12s} {row['method']:8s} {int(row['forward_passes'])} pass(es) "
+            f"latency {_latency_cell(row):18s} "
             f"FP on lesion-free {_fp_cell(row) or '-':8s} removed "
             f"{_number(row['false_positives_removed'], decimals=0) or '-'}"
         )

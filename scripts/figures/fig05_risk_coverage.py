@@ -9,6 +9,19 @@ the AUROC/AURC that ``uncertainty_audit_auroc.csv`` computed from exactly those 
 = own``, same ``failure_definition``).  ``AURC n/a`` is printed whenever the audit holds no finite
 AURC for that signal, instead of inventing one.
 
+The two panels use the two Dice-based failure definitions the audit actually wrote (there is **no**
+HD95 definition in ``uncertainty_audit_auroc.csv``; its only values are ``all_failures``,
+``non_missed_failures`` and ``missed_vs_clean``):
+
+* (a) ``non_missed_failures``: ``(~missed) & (dice < 0.5)`` - a non-empty prediction that still fails;
+* (b) ``all_failures``: ``missed | (dice < 0.5)`` - the same failures **plus** the empty predictions.
+
+Every score is judged against the failures of its own prediction (``label_source = own``), the curves
+are computed from exactly the definition named in the panel title, and the legend quotes the AUROC /
+AURC rows of that same definition.  ``AURC n/a`` is printed whenever the audit holds no finite value.
+A guard compares the two panels entry by entry and refuses to let panel (b) report a panel-(a) number
+unless the two definitions provably select the same cases for that predictor.
+
 The curves are risk-coverage curves in the selective-prediction sense: cases are kept from the *most
 confident* one (lowest uncertainty score) to the least confident, so the failure rate of the retained
 set starts at the most confident case and rises to the cohort's own failure rate as coverage reaches
@@ -16,9 +29,6 @@ set starts at the most confident case and rises to the cohort's own failure rate
 100 % and falls - that is the rejection curve of the rejected set, not a risk-coverage curve, and it
 hides the fact that the good signals rank failures last.  An assertion keeps the direction honest:
 the first point must sit below the base rate and the last point must equal it.
-
-The supplementary panel repeats the analysis with the HD95 > 50 px definition, so a reviewer can see
-that the ranking does not depend on which failure label is used.
 
 Signals: single-view ROI entropy (baseline), TTA-4 ROI entropy, 1 - confidence (baseline), TTA-4 view
 disagreement and 1 - pairwise view Dice of the TTA-4 views.
@@ -88,7 +98,8 @@ SIGNALS = (
 
 #: the audit calls the plotted "1 - pairwise view Dice" score ``tta4_view_dice_disagreement``
 METHOD_LABELS = {"baseline": "baseline failures", "tta4": "TTA-4 failures"}
-DEFINITIONS = {"dice": "non_missed_failures", "hd95": "all_failures"}
+#: panel key -> the ``failure_definition`` column of the audit (the audit has no HD95 definition)
+DEFINITIONS = {"non_missed": "non_missed_failures", "all": "all_failures"}
 
 
 
@@ -105,18 +116,27 @@ def _curve(scores: np.ndarray, failed: np.ndarray) -> tuple[np.ndarray, np.ndarr
     return retained, np.cumsum(ordered) / np.arange(1, ordered.size + 1) * 100.0
 
 
-def _audit_values(audit: pd.DataFrame, predictor: str, definition: str) -> tuple[float, float]:
-    """AUROC and AURC of one signal, from the audit rows of this very definition (own labels)."""
+def _audit_values(
+    audit: pd.DataFrame, predictor: str, definition: str
+) -> tuple[float, float, float, float]:
+    """AUROC, AURC and the row size of one signal, in one audit definition (own labels)."""
+    missing = (float("nan"), float("nan"), float("nan"), float("nan"))
     if audit.empty or predictor not in set(audit["predictor"]):
-        return float("nan"), float("nan")
+        return missing
     rows = audit.loc[
         (audit["predictor"] == predictor)
         & (audit["label_source"] == "own")
         & (audit["failure_definition"] == definition)
     ]
     if rows.empty:
-        return float("nan"), float("nan")
-    return float(rows["auroc"].iloc[0]), float(rows["aurc"].iloc[0])
+        return missing
+    row = rows.iloc[0]
+    return (
+        float(row["auroc"]),
+        float(row["aurc"]),
+        float(row["n_used"]),
+        float(row["n_failures"]),
+    )
 
 
 def _format(auroc_value: float, aurc_value: float) -> str:
@@ -128,37 +148,45 @@ def _format(auroc_value: float, aurc_value: float) -> str:
 
 
 def _labels(table: pd.DataFrame, method: str, definition: str) -> np.ndarray:
-    """Failure label of one method: Dice < 0.5 on a non-empty prediction, or HD95 > 50 px."""
-    if definition == "dice":
-        failed = (table[f"dice_{method}"] < FAILURE_DICE).to_numpy()
-        column = f"missed_{method}"
-        if column in table:
-            failed = failed & ~table[column].to_numpy(dtype=bool)  # empty predictions are misses, not failures
+    """Failure label of one method, in the audit's own terms.
+
+    ``non_missed``: ``(~missed) & (dice < 0.5)`` - a non-empty prediction that still fails;
+    ``all``: ``missed | (dice < 0.5)`` - the same failures plus the empty predictions.
+    """
+    dice = table[f"dice_{method}"].to_numpy(dtype=float)
+    failed = dice < FAILURE_DICE
+    column = f"missed_{method}"
+    if column not in table:
         return failed
-    return (table[f"hd95_{method}"] > FAILURE_HD95_PX).to_numpy()
+    missed = table[column].to_numpy(dtype=bool)
+    if definition == "non_missed":
+        # a copy: `failed` is a read-only view of the frame under pandas 3
+        return failed & ~missed  # empty predictions are misses, not failures
+    return missed | failed
 
 
 def _panel(
     ax, table: pd.DataFrame, definition: str, title: str, audit: pd.DataFrame, tag: str
-) -> None:
-    """One risk-coverage panel; every curve is asserted to run the right way round."""
+) -> dict[str, dict[str, float]]:
+    """One risk-coverage panel; every curve is asserted to run the right way round.
+
+    Returns the audit row behind every legend entry, so :func:`_guard_reuse` can check that the two
+    panels really use their own definition.
+    """
+    used: dict[str, dict[str, float]] = {}
     base_rates = {
         method: float(_labels(table, method, definition).mean()) * 100.0
         for method in ("baseline", "tta4")
     }
-    for position, (method, rate_value) in enumerate(
-        sorted(base_rates.items(), key=lambda item: -item[1])
-    ):
+    for method, rate_value in base_rates.items():
         ax.axhline(rate_value, color="#909090", linestyle=":", linewidth=0.8, zorder=1)
-        ax.annotate(
-            f"{METHOD_LABELS[method]} {rate_value:.1f} %",
-            (3.0, rate_value),
-            textcoords="offset points",
-            xytext=(0, 3 if position == 0 else -9),
-            va="bottom" if position == 0 else "top",
-            fontsize=5.0,
-            color="#606060",
+    notes = [
+        "dotted: failure rate without rejection - "
+        + ", ".join(
+            f"{'baseline' if method == 'baseline' else 'TTA-4'} {rate_value:.1f} %"
+            for method, rate_value in sorted(base_rates.items(), key=lambda item: -item[1])
         )
+    ]
     legend_lines: list[str] = []
     for column, method, label, colour, linestyle, predictor in SIGNALS:
         if column not in table:
@@ -169,26 +197,46 @@ def _panel(
         failed = _labels(table, method, definition)
         retained, rate = _curve(scores, failed)
         base_rate = float(failed.mean()) * 100.0
-        if not float(rate[0]) < base_rate:
+        mean_rate = float(rate.mean())
+        below = float((rate < base_rate).mean())
+        # Direction guard: a risk-coverage curve sorted most-confident-first spends most of its
+        # coverage range *below* the no-rejection line and then reaches it exactly.  The inverted
+        # sort (most uncertain first) spends most of the range above the line - that was the bug.
+        if below < 0.5:
             raise AssertionError(
-                f"{tag}/{column}: the first point of the risk-coverage curve is "
-                f"{float(rate[0]):.2f} %, not below the base rate {base_rate:.2f} % - the curve "
-                "is sorted the wrong way round"
+                f"{tag}/{column}: the curve is below the base rate at only {below:.0%} of the "
+                "coverage range - the cases are sorted the wrong way round"
             )
         if abs(float(rate[-1]) - base_rate) > 1e-6:
             raise AssertionError(
                 f"{tag}/{column}: full coverage ends at {float(rate[-1]):.6f} %, "
                 f"not at the base rate {base_rate:.6f} %"
             )
-        auroc_value, aurc_value = _audit_values(audit, predictor, DEFINITIONS[definition])
+        auroc_value, aurc_value, n_used, n_failures = _audit_values(
+            audit, predictor, DEFINITIONS[definition]
+        )
         text = _format(auroc_value, aurc_value)
         ax.plot(retained, rate, color=colour, linestyle=linestyle, label=f"{label}  {text}")
+        used[predictor] = {
+            "auroc": auroc_value,
+            "aurc": aurc_value,
+            "n_used": n_used,
+            "n_failures": n_failures,
+        }
         legend_lines.append(
             f"    {label:30s} AUROC {auroc_value:.4f}  AURC {aurc_value:.4f}   "
-            f"[audit {predictor} / own / {DEFINITIONS[definition]}]   "
-            f"base {base_rate:5.2f} %  first {float(rate[0]):5.2f} %  last {float(rate[-1]):5.2f} %"
+            f"[audit {predictor} / own / {DEFINITIONS[definition]} / "
+            f"n={n_used:.0f} / {n_failures:.0f} failures]   "
+            f"base {base_rate:5.2f} %  first {float(rate[0]):6.2f} %  "
+            f"mean {mean_rate:5.2f} %  last {float(rate[-1]):5.2f} %  below {below:.0%}"
         )
-        if predictor == "tta4_view_dice_disagreement" and definition == "dice":
+        if float(rate[0]) >= base_rate:
+            legend_lines.append(
+                "      note: the single most confident case is itself a failure under this "
+                "definition - an empty prediction has no view disagreement, so agreement-based "
+                "signals rank it first"
+            )
+        if predictor == "tta4_view_dice_disagreement" and definition == "non_missed":
             if abs(auroc_value - 0.865) > 5e-4:
                 raise AssertionError(
                     "the pairwise view Dice entry for the UNet is no longer AUROC 0.865 but "
@@ -199,17 +247,65 @@ def _panel(
                 "uncertainty_audit_auroc.csv"
             )
     ax.set_xlim(0, 100)
-    # headroom above the highest curve/base rate so the legend never covers a line
-    highest = max(
-        [float(np.max(np.asarray(line.get_ydata(), dtype=float))) for line in ax.lines if len(line.get_ydata())]
+    # Robust upper limit: the first few cases can be a single degenerate point (for an
+    # agreement-based signal an empty prediction is the most "confident" case), which would
+    # otherwise stretch the axis to 100 % and flatten every curve.  Peaks above the limit are
+    # annotated rather than silently dropped.
+    tail = rate[max(1, int(0.02 * rate.size)) :]
+    top = max(max(base_rates.values()) * 1.7, float(tail.max()) * 1.45)
+    ax.set_ylim(0, top)
+    if float(rate.max()) > top:
+        notes.insert(0, f"peak {float(rate.max()):.0f} % at the first case (off scale)")
+    ax.annotate(
+        "\n".join(notes),
+        (0.985, 0.02),
+        xycoords="axes fraction",
+        ha="right",
+        va="bottom",
+        fontsize=5.0,
+        color="#606060",
+        linespacing=1.4,
+        bbox={"facecolor": "white", "alpha": 0.8, "pad": 1.2, "linewidth": 0},
     )
-    ax.set_ylim(0, highest * 1.55)
     ax.set_title(title, loc="left")
     ax.set_xlabel("coverage retained [%]")
     ax.set_ylabel("failure rate [%]")
     print(f"  legend entries of {title}")
     for line in legend_lines:
         print(line)
+    return used
+
+
+def _guard_reuse(
+    primary: dict[str, dict[str, float]], supplementary: dict[str, dict[str, float]]
+) -> None:
+    """Refuse a panel-(b) number that is silently a panel-(a) number.
+
+    An identical AUROC/AURC across the two definitions is legitimate only when the two definitions
+    select exactly the same rows (same ``n_used`` and ``n_failures``) - which happens for a predictor
+    that is undefined on every case the definitions disagree about.  Anything else means panel (b) is
+    quoting the wrong audit rows.
+    """
+    if DEFINITIONS["all"] == DEFINITIONS["non_missed"]:
+        raise AssertionError("both panels would use the same failure definition")
+    for predictor, b in supplementary.items():
+        a = primary.get(predictor)
+        if a is None or not np.isfinite(b["auroc"]) or not np.isfinite(a["auroc"]):
+            continue
+        same_values = np.isclose(b["auroc"], a["auroc"]) and np.isclose(b["aurc"], a["aurc"])
+        if not same_values:
+            continue
+        same_rows = (b["n_used"] == a["n_used"]) and (b["n_failures"] == a["n_failures"])
+        if not same_rows:
+            raise AssertionError(
+                f"{predictor}: panel (b) reports the panel-(a) AUROC/AURC although the definitions "
+                f"select different cases ({a['n_used']:.0f}/{a['n_failures']:.0f} vs "
+                f"{b['n_used']:.0f}/{b['n_failures']:.0f}) - the panel is reusing the wrong rows"
+            )
+        print(
+            f"  ok: {predictor} has identical AUROC/AURC under both definitions because both "
+            f"select the same {b['n_used']:.0f} cases with {b['n_failures']:.0f} failures"
+        )
 
 
 def main() -> int:
@@ -219,13 +315,42 @@ def main() -> int:
         return 2
     table = pd.read_csv(PER_CASE)
     audit = pd.read_csv(AUROC) if AUROC.is_file() else pd.DataFrame()
+    if not audit.empty:
+        print(
+            "failure definitions in uncertainty_audit_auroc.csv: "
+            + ", ".join(sorted(audit["failure_definition"].unique()))
+        )
     import matplotlib.pyplot as plt
 
     fig, (primary, supplementary) = plt.subplots(1, 2, figsize=(7.2, 3.4))
-    _panel(primary, table, "dice", "(a) primary: Dice < 0.5, own prediction", audit, "dice")
-    _panel(supplementary, table, "hd95", "(b) supplementary: HD95 > 50 px", audit, "hd95")
+    used_primary = _panel(
+        primary,
+        table,
+        "non_missed",
+        "(a) non-missed failures\nDice < 0.5, empty predictions excluded",
+        audit,
+        "non_missed",
+    )
+    used_supplementary = _panel(
+        supplementary,
+        table,
+        "all",
+        "(b) all failures\nDice < 0.5 or empty prediction",
+        audit,
+        "all",
+    )
+    _guard_reuse(used_primary, used_supplementary)
     for ax in (primary, supplementary):
-        ax.legend(loc="upper left", fontsize=5.2, borderaxespad=0.4, handlelength=1.6)
+        ax.legend(
+            loc="upper right",
+            fontsize=5.2,
+            borderaxespad=0.4,
+            handlelength=1.6,
+            frameon=True,
+            facecolor="white",
+            edgecolor="none",
+            framealpha=0.9,
+        )
     style.save(fig, "fig05_risk_coverage")
     return 0
 

@@ -3,8 +3,8 @@
 Rows are chosen by a rule, never by eye, and **every row is drawn with the checkpoint that shows it
 best** (named in the row label) - no checkpoint is fixed in advance:
 
-* **three small polyps from the external collections** (CVC-ColonDB and ETIS-Larib) that the baseline
-  detects and TTA-8 loses.  A case qualifies when the baseline prediction is non-empty in the
+* **three missed polyps from the external collections** (CVC-ColonDB and ETIS-Larib) that the
+  baseline detects and TTA-8 loses.  A case qualifies when the baseline prediction is non-empty in the
   majority of the 15 checkpoints *and* the TTA-8 prediction is empty in the majority of them.  Among
   the checkpoints in which TTA-8 really is empty, the row is drawn with the one that gives the
   baseline its highest Dice, provided that Dice reaches 0.3 (so the "before" panel shows a real, if
@@ -12,7 +12,9 @@ best** (named in the row label) - no checkpoint is fixed in advance:
   first, at most two from one collection;
 * **two internal CVC-ClinicDB cases** with the largest TTA-4 Dice increase in the seed- and
   fold-averaged per-case table (the number the paper quotes), each drawn with the checkpoint that
-  gives the case its largest TTA-4 gain among the checkpoints whose baseline Dice reaches 0.3.
+  gives the case its largest TTA-4 gain among the checkpoints whose baseline Dice reaches 0.3, and
+  drawn with **TTA-4** so the picture matches the criterion.  The drawn Dice of every row is asserted
+  against the evaluation table (tolerance 0.011).
 
 Every map is recomputed on the **CPU** with that row's checkpoint, ``baseline`` and ``tta8`` views
 through the same ``predict_per_view -> resample -> aggregate`` path the evaluation uses, so the
@@ -47,6 +49,8 @@ MAJORITY = 0.5
 MIN_BASELINE_DICE = 0.3
 #: at most this many drawn rows may come from the same external collection
 MAX_PER_COLLECTION = 2
+#: the drawn Dice may differ from the table by this much (float16 maps + bilinear resampling)
+DICE_TOLERANCE = 0.011
 CHECKPOINT_TEMPLATE = "checkpoints/cvc_clinicdb_unet_resnet50/fold{fold}_seed{seed}/best.pt"
 _CHECKPOINT_NAME = re.compile(r"fold(?P<fold>\d+)_seed(?P<seed>\d+)_per_case\.csv$")
 
@@ -241,8 +245,8 @@ class Inference:
     def _image_path(self, case_id: str) -> Path | None:
         return next(self.images_dir.glob(f"{case_id}.*"), None)
 
-    def maps(self, case_id: str) -> dict:
-        """Native-grid reference, display image and the binary mask of each method."""
+    def maps(self, case_id: str, methods: tuple[str, ...] = METHODS) -> dict:
+        """Native-grid reference, display image and the binary mask of each requested method."""
         from melba.eval.runner import resample_probability_map
         from melba.inference import aggregate_probabilities, predict_per_view_tensor
 
@@ -253,7 +257,7 @@ class Inference:
         target = mask[0].numpy() if hasattr(mask[0], "numpy") else np.asarray(mask[0])
         reference = np.asarray(target) > 0.5
         result: dict = {"reference": reference}
-        for name in METHODS:
+        for name in methods:
             with self.torch.no_grad():
                 views = predict_per_view_tensor(
                     self.model,
@@ -324,13 +328,14 @@ def main() -> int:
             f"reference {float(item['gt_pixels']):7.0f} px  baseline non-empty in "
             f"{float(item['detected']) * 100:5.1f} % of 15 checkpoints, TTA-8 empty in "
             f"{float(item['tta8_missed']) * 100:5.1f} %  -> drawn with fold{item['fold']}_seed{item['seed']} "
-            f"(baseline Dice {float(item['baseline_dice']):.3f} in the table)"
+            f"(baseline Dice {float(item['baseline_dice']):.3f} in the table, TTA-8 empty)"
         )
     for item in internal:
         print(
             f"  internal cvc_clinicdb case {item['case_id']:>4s} grid TTA-4 gain "
             f"{item['grid_gain']:+.3f} -> drawn with fold{item['fold']}_seed{item['seed']} "
-            f"(Dice {item['baseline_dice']:.3f} -> {item['tta4']:.3f} with TTA-4)"
+            f"(table Dice {item['baseline_dice']:.3f} -> {item['tta4']:.3f} with TTA-4, "
+            f"drawn column is TTA-4)"
         )
 
     rows: list[dict] = []
@@ -346,14 +351,17 @@ def main() -> int:
                 _external_overrides(key, fold, seed),
                 fold=fold,
             )
-        maps = engines[cache_key].maps(str(item["case_id"]))
+        maps = engines[cache_key].maps(str(item["case_id"]), METHODS)
         rows.append(
             {
                 "label": (
                     f"{style.LABELS[key].replace(' (external)', '')} {item['case_id']}\n"
-                    f"fold{fold}_seed{seed}\n"
+                    f"fold{fold}_seed{seed} · TTA-8\n"
                     f"TTA-8 empty {float(item['tta8_missed']) * 15:.0f}/15"
                 ),
+                "method": "tta8",
+                "method_label": "TTA-8",
+                "expected": {f"baseline": float(item["baseline_dice"]), "tta8": 0.0},
                 **maps,
             }
         )
@@ -367,14 +375,20 @@ def main() -> int:
                 _internal_overrides(fold, seed),
                 fold=fold,
             )
-        maps = engines[cache_key].maps(str(item["case_id"]))
+        maps = engines[cache_key].maps(str(item["case_id"]), ("baseline", "tta4"))
         rows.append(
             {
                 "label": (
                     f"CVC-ClinicDB {item['case_id']}\n"
-                    f"fold{fold}_seed{seed}\n"
+                    f"fold{fold}_seed{seed} · TTA-4\n"
                     f"TTA-4 gain {item['grid_gain']:+.2f}"
                 ),
+                "method": "tta4",
+                "method_label": "TTA-4",
+                "expected": {
+                    "baseline": float(item["baseline_dice"]),
+                    "tta4": float(item["tta4"]),
+                },
                 **maps,
             }
         )
@@ -382,21 +396,37 @@ def main() -> int:
 
 
 def _draw(rows: list[dict]) -> int:
-    """The grid: image, reference, baseline, TTA-8 per row, with the Dice of both methods."""
+    """The grid: image, reference, baseline, TTA per row, with the Dice of both methods."""
     import matplotlib.patheffects as path_effects
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
 
     for row in rows:
         row["before"] = _dice(row["baseline"], row["reference"])
-        row["after"] = _dice(row["tta8"], row["reference"])
+        row["after"] = _dice(row[row["method"]], row["reference"])
+        expected = row["expected"]
+        # The tables come from GPU runs with AMP (float16 logits), the drawn maps from float32 on
+        # the CPU, so a borderline pixel can move the Dice by about a hundredth.  The check is made
+        # on the values at the precision they are reported with (3 decimals).
+        checked = {"baseline": row["before"], row["method"]: row["after"]}
+        for key, value in checked.items():
+            delta = abs(round(value, 3) - round(expected[key], 3))
+            if delta > DICE_TOLERANCE + 1e-9:
+                raise AssertionError(
+                    f"{row['label'].splitlines()[0]}: drawn {key} Dice {value:.3f} does not match "
+                    f"the table's {expected[key]:.3f} (|delta| {delta:.3f} > {DICE_TOLERANCE})"
+                )
         print(
-            f"  drawn {row['label'].splitlines()[0]:22s} Dice {row['before']:.3f} -> "
-            f"{row['after']:.3f}  (baseline {int(row['baseline'].sum())} px, "
-            f"TTA-8 {int(row['tta8'].sum())} px)"
+            f"  drawn {row['label'].splitlines()[0]:22s} {row['method_label']:5s} "
+            f"Dice {row['before']:.3f} -> {row['after']:.3f}  "
+            f"(table {expected['baseline']:.3f} -> {expected[row['method']]:.3f}, "
+            f"|delta| {abs(round(row['before'], 3) - round(expected['baseline'], 3)):.3f} / "
+            f"{abs(round(row['after'], 3) - round(expected[row['method']], 3)):.3f}; "
+            f"baseline {int(row['baseline'].sum())} px, {row['method_label']} "
+            f"{int(row[row['method']].sum())} px)"
         )
 
-    columns = ("image", "reference", "baseline", "TTA-8")
+    columns = ("image", "reference", "baseline", "TTA")
     fig, axes = plt.subplots(
         len(rows), len(columns), figsize=(7.0, 1.55 * len(rows)), squeeze=False
     )
@@ -406,7 +436,7 @@ def _draw(rows: list[dict]) -> int:
             (None, None),
             (row["reference"], None),
             (row["reference"], row["baseline"]),
-            (row["reference"], row["tta8"]),
+            (row["reference"], row[row["method"]]),
         )
         for column_index, (reference, prediction) in enumerate(panels):
             ax = axes[row_index][column_index]
