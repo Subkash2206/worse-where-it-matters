@@ -1,0 +1,13 @@
+dataset,unit,method,boundary_failures_fixed_per_1000,misses_added_per_1000,false_positives_removed_per_1000,extra_ms_per_frame,latency_source,note
+cvc_unet,frames,tta4,99.673202614379,6.5359477124183005,,135.0,"45 ms per pass (2-D, 352x352)",
+cvc_unet,frames,tta8,111.1111111111111,6.5359477124183005,,315.0,"45 ms per pass (2-D, 352x352)",
+cvc_swin,frames,tta4,47.385620915032604,0.0,,135.0,"45 ms per pass (2-D, 352x352)",
+cvc_swin,frames,tta8,65.359477124183,0.0,,315.0,"45 ms per pass (2-D, 352x352)",
+brats,patients,tta4,13.5891286970423,2.4630541871921183,60.60606060606061,5250.0,1750 ms per pass (3-D SegResNet 128^3),
+brats,patients,tta8,15.9872102318145,0.8210180623973727,30.303030303030305,12250.0,1750 ms per pass (3-D SegResNet 128^3),
+cvc_colondb,frames,tta4,,21.05263157894737,,135.0,"45 ms per pass (2-D, 352x352)",no HD95 failure-rate estimate in the external tables
+cvc_colondb,frames,tta8,,34.21052631578947,,315.0,"45 ms per pass (2-D, 352x352)",no HD95 failure-rate estimate in the external tables
+etis_larib,frames,tta4,,56.12244897959184,,135.0,"45 ms per pass (2-D, 352x352)",no HD95 failure-rate estimate in the external tables
+etis_larib,frames,tta8,,66.3265306122449,,315.0,"45 ms per pass (2-D, 352x352)",no HD95 failure-rate estimate in the external tables
+kvasir_seg,frames,tta4,,0.0,,135.0,"45 ms per pass (2-D, 352x352)",no HD95 failure-rate estimate in the external tables
+kvasir_seg,frames,tta8,,0.0,,315.0,"45 ms per pass (2-D, 352x352)",no HD95 failure-rate estimate in the external tables
