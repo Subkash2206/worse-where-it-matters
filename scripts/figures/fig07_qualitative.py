@@ -51,6 +51,10 @@ MIN_BASELINE_DICE = 0.3
 MAX_PER_COLLECTION = 2
 #: the drawn Dice may differ from the table by this much (float16 maps + bilinear resampling)
 DICE_TOLERANCE = 0.011
+#: the zoom panel crops a window this many times the reference bounding box, centred on it
+ZOOM_FACTOR = 3.0
+BASELINE_COLOUR = style.OKABE_ITO["vermillion"]
+TTA_COLOUR = style.OKABE_ITO["blue"]
 CHECKPOINT_TEMPLATE = "checkpoints/cvc_clinicdb_unet_resnet50/fold{fold}_seed{seed}/best.pt"
 _CHECKPOINT_NAME = re.compile(r"fold(?P<fold>\d+)_seed(?P<seed>\d+)_per_case\.csv$")
 
@@ -64,14 +68,17 @@ def _grid_table(directory: Path) -> pd.DataFrame:
     """Per (case, checkpoint, method) Dice and detection flag of one evaluation directory.
 
     The fold and the seed are read back from the per-case file names, so every row can be tied to
-    the checkpoint that produced it - which is what the drawing rule needs.
+    the checkpoint that produced it - which is what the drawing rule needs.  ``group_id`` is kept so
+    the internal rows can be forced onto distinct videos.
     """
     frames = []
     for path in sorted(directory.glob("*_per_case.csv")):
         match = _CHECKPOINT_NAME.search(path.name)
         if match is None:
             continue
-        frame = pd.read_csv(path, usecols=["case_id", "method", "metric", "value", "missed_detection"])
+        frame = pd.read_csv(
+            path, usecols=["case_id", "group_id", "method", "metric", "value", "missed_detection"]
+        )
         frame = frame.loc[(frame["metric"] == "dice") & (frame["method"].isin(METHODS + ("tta4",)))]
         frames.append(
             frame.assign(
@@ -84,10 +91,19 @@ def _grid_table(directory: Path) -> pd.DataFrame:
         return pd.DataFrame()
     table = pd.concat(frames, ignore_index=True)
     wide = table.pivot_table(
-        index=["case_id", "fold", "seed"], columns="method", values=["value", "missed_detection"]
+        index=["case_id", "fold", "seed"],
+        columns="method",
+        values=["value", "missed_detection"],
     )
     wide.columns = [f"{method}_{field}" for field, method in wide.columns]
-    return wide.reset_index()
+    wide = wide.reset_index()
+    video = (
+        table.groupby(["case_id", "fold", "seed"])["group_id"]
+        .agg(lambda values: str(values.iloc[0]))
+        .rename("group_id")
+        .reset_index()
+    )
+    return wide.merge(video, on=["case_id", "fold", "seed"], how="left")
 
 
 def select_external(count: int = N_EXTERNAL) -> list[dict]:
@@ -147,39 +163,38 @@ def select_external(count: int = N_EXTERNAL) -> list[dict]:
 
 
 def select_internal(count: int = N_INTERNAL) -> list[dict]:
-    """Internal repair cases: grid-level TTA-4 gain, drawn at that case's best checkpoint.
+    """Internal repair rows: the largest single-checkpoint TTA-4 Dice gains, one video each.
 
-    The ranking uses the seed- and fold-averaged per-case table (the number the paper quotes), and
-    each row is drawn with the checkpoint that gives the case its largest TTA-4 gain among the
-    checkpoints whose baseline Dice reaches ``MIN_BASELINE_DICE`` - the same "the before panel must
-    show a real segmentation" floor as the external rows.
+    The criterion is the gain *of the drawn checkpoint*, not a grid average, so the row label, the
+    Dice text and the picture all state the same number.  Only checkpoints whose baseline Dice reaches
+    ``MIN_BASELINE_DICE`` are eligible (the "before" panel must show a real segmentation), and the
+    rows are forced onto distinct videos so the figure does not show two frames of the same sequence.
     """
-    aggregate = pd.read_csv(
-        style.RESULTS / "aggregate_cvc_clinicdb_unet_resnet50" / "uncertainty_audit_per_case.csv",
-        usecols=["case_id", "dice_baseline", "dice_tta4"],
-    )
-    aggregate["case_id"] = aggregate["case_id"].astype(str)
-    aggregate["gain"] = aggregate["dice_tta4"] - aggregate["dice_baseline"]
     wide = _grid_table(style.RESULTS / "cvc_clinicdb_unet_resnet50" / "evaluation")
+    if wide.empty:
+        return []
+    wide["gain"] = wide["tta4_value"] - wide["baseline_value"]
+    qualified = wide.loc[wide["baseline_value"] >= MIN_BASELINE_DICE].sort_values(
+        "gain", ascending=False
+    )
     rows: list[dict] = []
-    for _, case in aggregate.sort_values("gain", ascending=False).iterrows():
+    videos: set[str] = set()
+    for _, row in qualified.iterrows():
         if len(rows) >= count:
             break
-        block = wide.loc[wide["case_id"] == case["case_id"]]
-        block = block.loc[block["baseline_value"] >= MIN_BASELINE_DICE]
-        if block.empty:
+        video = str(row["group_id"])
+        if video in videos:
             continue
-        best = block.assign(gain=block["tta4_value"] - block["baseline_value"]).sort_values(
-            "gain", ascending=False
-        ).iloc[0]
+        videos.add(video)
         rows.append(
             {
-                "case_id": str(case["case_id"]),
-                "fold": int(best["fold"]),
-                "seed": int(best["seed"]),
-                "baseline_dice": float(best["baseline_value"]),
-                "tta4": float(best["tta4_value"]),
-                "grid_gain": float(case["gain"]),
+                "case_id": str(row["case_id"]),
+                "fold": int(row["fold"]),
+                "seed": int(row["seed"]),
+                "baseline_dice": float(row["baseline_value"]),
+                "tta4": float(row["tta4_value"]),
+                "gain": float(row["gain"]),
+                "video": video,
             }
         )
     return rows
@@ -332,10 +347,10 @@ def main() -> int:
         )
     for item in internal:
         print(
-            f"  internal cvc_clinicdb case {item['case_id']:>4s} grid TTA-4 gain "
-            f"{item['grid_gain']:+.3f} -> drawn with fold{item['fold']}_seed{item['seed']} "
-            f"(table Dice {item['baseline_dice']:.3f} -> {item['tta4']:.3f} with TTA-4, "
-            f"drawn column is TTA-4)"
+            f"  internal cvc_clinicdb case {item['case_id']:>4s} (video {item['video']}) "
+            f"single-checkpoint TTA-4 gain {item['gain']:+.3f} -> drawn with "
+            f"fold{item['fold']}_seed{item['seed']} "
+            f"(table Dice {item['baseline_dice']:.3f} -> {item['tta4']:.3f}, drawn column is TTA-4)"
         )
 
     rows: list[dict] = []
@@ -381,7 +396,7 @@ def main() -> int:
                 "label": (
                     f"CVC-ClinicDB {item['case_id']}\n"
                     f"fold{fold}_seed{seed} · TTA-4\n"
-                    f"TTA-4 gain {item['grid_gain']:+.2f}"
+                    f"TTA-4 gain {item['gain']:+.2f}"
                 ),
                 "method": "tta4",
                 "method_label": "TTA-4",
@@ -395,10 +410,56 @@ def main() -> int:
     return _draw(rows)
 
 
+def _reference_contour(ax, reference) -> None:
+    """White dashed reference over a dark halo, so it reads on bright and dark frames."""
+    if reference is None or not np.asarray(reference).any():
+        return
+    values = np.asarray(reference).astype(float)
+    ax.contour(values, levels=[0.5], colors="#000000", linewidths=1.3, alpha=0.6)
+    ax.contour(values, levels=[0.5], colors="#ffffff", linewidths=0.7, linestyles="--")
+
+
+def _prediction_contour(ax, prediction, colour) -> None:
+    """Solid prediction contour in the colour of the method it belongs to."""
+    if prediction is None or not np.asarray(prediction).any():
+        return
+    ax.contour(np.asarray(prediction).astype(float), levels=[0.5], colors=colour, linewidths=1.0)
+
+
+def _zoom_slices(reference: np.ndarray, factor: float = ZOOM_FACTOR) -> tuple[slice, slice]:
+    """Crop window of about ``factor`` times the reference bounding box, centred on it.
+
+    The window is clipped to the frame, so a polyp near the border still gives a valid crop.
+    """
+    rows = np.flatnonzero(reference.any(axis=1))
+    cols = np.flatnonzero(reference.any(axis=0))
+    height, width = reference.shape
+    if rows.size == 0 or cols.size == 0:  # empty reference: fall back to the whole frame
+        return slice(0, height), slice(0, width)
+    height_span = max(int(round((rows[-1] - rows[0] + 1) * factor)), 16)
+    width_span = max(int(round((cols[-1] - cols[0] + 1) * factor)), 16)
+    height_span = min(height_span, height)
+    width_span = min(width_span, width)
+    centre_row = (rows[0] + rows[-1]) / 2.0
+    centre_col = (cols[0] + cols[-1]) / 2.0
+    top = max(0, min(int(round(centre_row - height_span / 2.0)), height - height_span))
+    left = max(0, min(int(round(centre_col - width_span / 2.0)), width - width_span))
+    return slice(top, top + height_span), slice(left, left + width_span)
+
+
+def _reference_handle() -> tuple:
+    """Legend sample of the dashed reference: white dashes over a black outline, as drawn."""
+    from matplotlib.lines import Line2D
+
+    outline = Line2D([], [], color="#000000", linestyle="--", linewidth=2.4)
+    core = Line2D([], [], color="#ffffff", linestyle="--", linewidth=0.8)
+    return (outline, core)
+
+
 def _draw(rows: list[dict]) -> int:
     """The grid: image, reference, baseline, TTA per row, with the Dice of both methods."""
-    import matplotlib.patheffects as path_effects
     import matplotlib.pyplot as plt
+    from matplotlib.legend_handler import HandlerTuple
     from matplotlib.lines import Line2D
 
     for row in rows:
@@ -426,41 +487,24 @@ def _draw(rows: list[dict]) -> int:
             f"{int(row[row['method']].sum())} px)"
         )
 
-    columns = ("image", "reference", "baseline", "TTA")
+    columns = ("image", "baseline", "TTA", f"zoom ({ZOOM_FACTOR:.0f}x)")
     fig, axes = plt.subplots(
-        len(rows), len(columns), figsize=(7.0, 1.55 * len(rows)), squeeze=False
+        len(rows), len(columns), figsize=(7.0, 1.28 * len(rows)), squeeze=False
     )
-    fig.subplots_adjust(left=0.155, right=0.995, top=0.955, bottom=0.035, hspace=0.08, wspace=0.03)
+    fig.subplots_adjust(left=0.155, right=0.995, top=0.94, bottom=0.03, hspace=0.06, wspace=0.03)
     for row_index, row in enumerate(rows):
         panels = (
-            (None, None),
-            (row["reference"], None),
-            (row["reference"], row["baseline"]),
-            (row["reference"], row[row["method"]]),
+            (None, None, None),
+            (row["reference"], row["baseline"], BASELINE_COLOUR),
+            (row["reference"], row[row["method"]], TTA_COLOUR),
         )
-        for column_index, (reference, prediction) in enumerate(panels):
+        for column_index, (reference, prediction, colour) in enumerate(panels):
             ax = axes[row_index][column_index]
             ax.imshow(row["image"])
-            if reference is not None:
-                # white dashed reference over a dark halo, so it reads on bright and dark frames
-                ax.contour(
-                    reference.astype(float), levels=[0.5], colors="#000000", linewidths=1.3, alpha=0.6
-                )
-                ax.contour(
-                    reference.astype(float),
-                    levels=[0.5],
-                    colors="#ffffff",
-                    linewidths=0.7,
-                    linestyles="--",
-                )
+            _reference_contour(ax, reference)
             if prediction is not None:
                 if prediction.any():
-                    ax.contour(
-                        prediction.astype(float),
-                        levels=[0.5],
-                        colors=style.OKABE_ITO["vermillion"],
-                        linewidths=1.0,
-                    )
+                    _prediction_contour(ax, prediction, colour)
                 else:
                     ax.annotate(
                         "empty",
@@ -475,6 +519,7 @@ def _draw(rows: list[dict]) -> int:
             ax.set_xticks([])
             ax.set_yticks([])
             ax.grid(False)
+            ax.set_anchor("N")
             for spine in ax.spines.values():
                 spine.set_visible(False)
             if row_index == 0:
@@ -497,20 +542,36 @@ def _draw(rows: list[dict]) -> int:
                     color="#ffffff",
                     bbox={"facecolor": "black", "alpha": 0.45, "pad": 1.0, "linewidth": 0},
                 )
-    reference_sample = Line2D([], [], color="#ffffff", linestyle="--", linewidth=0.9, label="reference")
-    reference_sample.set_path_effects(
-        [path_effects.Stroke(linewidth=2.0, foreground="#000000"), path_effects.Normal()]
-    )
-    prediction_sample = Line2D(
-        [], [], color=style.OKABE_ITO["vermillion"], linewidth=1.0, label="prediction"
-    )
+        # zoom: a crop about ZOOM_FACTOR x the reference bbox with all three contours overlaid
+        zoom_ax = axes[row_index][3]
+        rows_slice, cols_slice = _zoom_slices(row["reference"])
+        zoom_ax.imshow(row["image"][rows_slice, cols_slice])
+        _reference_contour(zoom_ax, row["reference"][rows_slice, cols_slice])
+        _prediction_contour(zoom_ax, row["baseline"][rows_slice, cols_slice], BASELINE_COLOUR)
+        _prediction_contour(zoom_ax, row[row["method"]][rows_slice, cols_slice], TTA_COLOUR)
+        zoom_ax.set_xticks([])
+        zoom_ax.set_yticks([])
+        zoom_ax.grid(False)
+        zoom_ax.set_anchor("N")
+        for spine in zoom_ax.spines.values():
+            spine.set_visible(False)
+        if row_index == 0:
+            zoom_ax.set_title(columns[3], fontsize=8)
+    handles = [
+        _reference_handle(),
+        Line2D([], [], color=BASELINE_COLOUR, linewidth=1.1, label="baseline prediction"),
+        Line2D([], [], color=TTA_COLOUR, linewidth=1.1, label="TTA prediction"),
+    ]
     fig.legend(
-        handles=[reference_sample, prediction_sample],
+        handles=handles,
+        labels=["reference", "baseline prediction", "TTA prediction"],
+        handler_map={tuple: HandlerTuple(ndivide=1)},
         loc="upper center",
-        ncol=2,
+        ncol=3,
         bbox_to_anchor=(0.5, -0.01),
         fontsize=6.5,
         columnspacing=1.6,
+        handlelength=2.6,
     )
     style.save(fig, "fig07_qualitative")
     return 0

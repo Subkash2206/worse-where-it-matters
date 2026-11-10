@@ -36,6 +36,8 @@ INTERNAL_ORDER = ("cvc_unet", "cvc_swin", "brats")
 EXTERNAL_ORDER = ("kvasir_seg", "cvc_colondb", "etis_larib")
 #: grey shades, light to dark per method (the legend is shared by both panels)
 GREY = {"baseline": "#333333", "tta4": "#8a8a8a", "tta8": "#c6c6c6"}
+#: the method names as every other figure writes them
+METHOD_TEXT = {"baseline": "baseline", "tta4": "TTA-4", "tta8": "TTA-8"}
 #: two-line tick labels: the full names are too wide for a two-panel figure
 SHORT_LABELS = {
     "cvc_unet": "CVC-ClinicDB\nUNet",
@@ -180,7 +182,7 @@ def _panel(ax, table: pd.DataFrame, order: tuple[str, ...], title: str, ylabel: 
             ax.plot([left, right], [height, height], color="#303030", linewidth=0.6, zorder=4)
             ax.annotate(
                 text,
-                (right, height),
+                ((left + right) / 2.0, height),
                 textcoords="offset points",
                 xytext=(0, 1.5),
                 ha="center",
@@ -217,10 +219,13 @@ def main() -> int:
         external,
         table,
         EXTERNAL_ORDER,
-        "(b) external: missed by 8 of 15 checkpoints",
+        "(b) external: missed by >= 8 of 15 checkpoints",
         "majority-miss rate [%]",
     )
-    handles = [Patch(facecolor=GREY[method], edgecolor="white", label=method) for method in METHODS]
+    handles = [
+        Patch(facecolor=GREY[method], edgecolor="white", label=METHOD_TEXT[method])
+        for method in METHODS
+    ]
     fig.legend(
         handles=handles,
         loc="upper center",

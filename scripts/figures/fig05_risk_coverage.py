@@ -256,24 +256,13 @@ def _panel(
     ax.set_ylim(0, top)
     if float(rate.max()) > top:
         notes.insert(0, f"peak {float(rate.max()):.0f} % at the first case (off scale)")
-    ax.annotate(
-        "\n".join(notes),
-        (0.985, 0.02),
-        xycoords="axes fraction",
-        ha="right",
-        va="bottom",
-        fontsize=5.0,
-        color="#606060",
-        linespacing=1.4,
-        bbox={"facecolor": "white", "alpha": 0.8, "pad": 1.2, "linewidth": 0},
-    )
     ax.set_title(title, loc="left")
     ax.set_xlabel("coverage retained [%]")
     ax.set_ylabel("failure rate [%]")
     print(f"  legend entries of {title}")
     for line in legend_lines:
         print(line)
-    return used
+    return used, notes
 
 
 def _guard_reuse(
@@ -323,7 +312,7 @@ def main() -> int:
     import matplotlib.pyplot as plt
 
     fig, (primary, supplementary) = plt.subplots(1, 2, figsize=(7.2, 3.4))
-    used_primary = _panel(
+    used_primary, notes_primary = _panel(
         primary,
         table,
         "non_missed",
@@ -331,7 +320,7 @@ def main() -> int:
         audit,
         "non_missed",
     )
-    used_supplementary = _panel(
+    used_supplementary, notes_supplementary = _panel(
         supplementary,
         table,
         "all",
@@ -351,6 +340,11 @@ def main() -> int:
             edgecolor="none",
             framealpha=0.9,
         )
+    # panel notes live outside the axes (the caption picks them up) so no box ever covers a curve
+    caption = "(a) " + "; ".join(notes_primary) + "\n(b) " + "; ".join(notes_supplementary)
+    fig.text(0.01, -0.02, caption, ha="left", va="top", fontsize=5.2, color="#606060", linespacing=1.5)
+    print("caption notes (also printed here so they can be pasted into the manuscript):")
+    print(caption)
     style.save(fig, "fig05_risk_coverage")
     return 0
 

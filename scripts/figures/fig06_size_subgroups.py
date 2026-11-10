@@ -136,7 +136,9 @@ def main() -> int:
             offset += width
     top.axhline(0.0, color="#909090", linewidth=0.7)
     top.set_ylabel("TTA-8 Dice gain")
-    top.set_title("Gain concentrates on small polyps; large ColonDB polyps gain nothing")
+    top.set_title(
+        "TTA-8 gains Dice in most size bins but adds missed polyps in every bin on ColonDB and ETIS"
+    )
     top.set_ylim(bottom=min(-0.005, float(top.get_ylim()[0])))
     top.set_ylim(top=float(top.get_ylim()[1]) * 1.02)
     bottom.set_ylabel("missed by most checkpoints (%)")
@@ -160,6 +162,15 @@ def main() -> int:
         fontsize=6.5,
         columnspacing=1.6,
         handletextpad=0.5,
+    )
+    fig.text(
+        0.5,
+        -0.155,
+        "marker shape = dataset",
+        ha="center",
+        va="top",
+        fontsize=5.5,
+        color="#606060",
     )
     style.save(fig, "fig06_size_subgroups")
     return 0
