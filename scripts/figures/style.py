@@ -8,6 +8,7 @@ for slides and quick review).
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import matplotlib
@@ -61,6 +62,10 @@ LABELS = {
 
 def apply() -> None:
     """Consistent, publication-ready defaults (single-column width, no chart junk)."""
+    # Reproducible PDFs: matplotlib stamps the creation date into every PDF and derives the file
+    # identifier from it, so an unchanged figure would get a new file (and a new git blob) on every
+    # re-run.  A fixed epoch makes a re-run of the same data produce the same bytes.
+    os.environ.setdefault("SOURCE_DATE_EPOCH", "0")
     plt.rcParams.update(
         {
             "figure.dpi": 120,
