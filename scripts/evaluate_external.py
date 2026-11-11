@@ -26,7 +26,7 @@ import argparse
 import sys
 import time
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT / "src") not in sys.path:
@@ -35,6 +35,7 @@ if str(_REPO_ROOT / "src") not in sys.path:
 import pandas as pd  # noqa: E402
 
 from melba.config import Config, ConfigError, load_config, parse_set_args  # noqa: E402
+from melba.data import build_dataset  # noqa: E402
 from melba.eval import (  # noqa: E402
     evaluate,
     per_case_path,
@@ -44,6 +45,7 @@ from melba.eval import (  # noqa: E402
 )
 from melba.eval.aggregate import write_tables  # noqa: E402
 from melba.eval.external import external_tables  # noqa: E402
+from melba.inference import methods_from_config  # noqa: E402
 from melba.utils import git_revision  # noqa: E402
 
 
@@ -193,11 +195,92 @@ def _eval_dir(dataset_dir: Path, model_config_path: Path) -> Path:
     return dataset_dir / model_config_path.stem / "evaluation"
 
 
+def per_case_complete(
+    path: Path, *, n_cases: int, methods: Sequence[str], model_stem: str | None = None
+) -> tuple[bool, str]:
+    """Is this per-case CSV a *finished* run of ``n_cases`` cases and ``methods``?
+
+    A killed process leaves a valid-looking but truncated CSV behind, and the previous resume
+    rule ("the file exists") then skipped that checkpoint for ever.  The check therefore reads
+    the file and verifies the coverage: every method of the run must be present and every
+    method must have one row set per case.  The reason string is printed when a run is redone.
+
+    ``model_stem`` additionally requires the file to have been produced by that model config
+    (its ``config_path`` column); the aggregate uses it when it looks in the pre-split layout,
+    where every architecture wrote to the same directory.
+    """
+    if not path.is_file():
+        return False, "missing"
+    columns = ["case_id", "method"]
+    if model_stem is not None:
+        columns.append("config_path")
+    try:
+        frame = pd.read_csv(path, usecols=columns)
+    except (pd.errors.ParserError, pd.errors.EmptyDataError, ValueError, UnicodeDecodeError) as error:
+        return False, f"unreadable ({type(error).__name__})"
+    if frame.empty:
+        return False, "empty"
+    if model_stem is not None:
+        produced_by = str(frame["config_path"].iloc[0])
+        if Path(produced_by).stem != model_stem:
+            return False, f"produced by {Path(produced_by).stem}, not {model_stem}"
+    per_method = frame.groupby("method")["case_id"].nunique()
+    missing = sorted(set(methods) - set(per_method.index))
+    if missing:
+        return False, f"missing method(s) {missing}"
+    short = {name: int(per_method[name]) for name in methods if int(per_method[name]) != int(n_cases)}
+    if short:
+        return False, f"case coverage {short} instead of {int(n_cases)}"
+    return True, f"{int(n_cases)} cases x {len(methods)} method(s)"
+
+
+def _per_case_candidates(
+    dataset_dir: Path, model_config_path: Path, dataset_name: str, fold: int, seed: int
+) -> list[Path]:
+    """Where the per-case CSV of a run may live, best first.
+
+    The architecture split moved every run into ``<dataset>/<model>/evaluation``; the runs made
+    before that split (and the external UNet baseline they hold) are still directly in
+    ``<dataset>/evaluation``.  Both are accepted, the new layout first.
+    """
+    name = f"{dataset_name}_test_fold{fold}_seed{seed}_per_case.csv"
+    return [
+        dataset_dir / model_config_path.stem / "evaluation" / name,
+        dataset_dir / "evaluation" / name,
+    ]
+
+
+def resolve_per_case(
+    candidates: Sequence[Path],
+    *,
+    n_cases: int,
+    methods: Sequence[str],
+    model_stem: str,
+) -> tuple[Path, bool, str]:
+    """First candidate that holds a complete run; else the new-layout path and why it failed."""
+    reason = "missing"
+    for position, path in enumerate(candidates):
+        complete, detail = per_case_complete(
+            path,
+            n_cases=n_cases,
+            methods=methods,
+            model_stem=model_stem if position else None,
+        )
+        if complete:
+            return path, True, detail
+        if path.is_file():
+            reason = detail
+    return candidates[0], False, reason
+
+
 def _frames_by_model(
     external: Config,
     steps: list[dict[str, Any]],
     dataset_name: str,
     dataset_dir: Path,
+    *,
+    n_cases: int,
+    expected_methods: Sequence[str],
 ) -> dict[str, pd.DataFrame]:
     """Read the per-case CSV of every finished run of one external dataset."""
     frames: dict[str, pd.DataFrame] = {}
@@ -216,9 +299,17 @@ def _frames_by_model(
             save_maps=False,
             limit=None,
         )
-        path = per_case_path(config, step["fold"], step["seed"], output_dir=output_dir)
-        if not path.is_file():
-            print(f"  missing run (skipped): {path.name}")
+        candidates = _per_case_candidates(
+            dataset_dir, step["model_path"], dataset_name, step["fold"], step["seed"]
+        )
+        path, complete, reason = resolve_per_case(
+            candidates,
+            n_cases=n_cases,
+            methods=expected_methods,
+            model_stem=step["model_path"].stem,
+        )
+        if not complete:
+            print(f"  incomplete run (skipped): {path.name} - {reason}")
             continue
         label = f"{step['model']}_fold{step['fold']}_seed{step['seed']}"
         frames[label] = string_ids(read_long_csv(path))
@@ -320,6 +411,7 @@ def main(argv: list[str] | None = None) -> int:
     unit = str(stats.get("unit", "group"))
     primary_test = str(stats.get("primary_test", "wilcoxon"))
     alternative = str(stats.get("alternative", "two-sided"))
+    split = str(external.get("evaluation.split", "test"))
 
     steps = _plan(model_paths, names, list(args.folds), list(args.seeds))
     absent = [step for step in steps if not step["checkpoint"].is_file()]
@@ -348,6 +440,8 @@ def main(argv: list[str] | None = None) -> int:
         dataset_dir = output_root / f"external_{dataset_name}"
         (dataset_dir / "evaluation").mkdir(parents=True, exist_ok=True)
         print(f"\n=== {dataset_name} ({entry.get('label', dataset_name)}) -> {dataset_dir}")
+        # size and method set of the dataset come from its own config, never from a guess
+        expectations: tuple[int, list[str]] | None = None
         for position, step in enumerate(steps):
             if step["dataset"] != dataset_name:
                 continue
@@ -367,13 +461,33 @@ def main(argv: list[str] | None = None) -> int:
                 save_maps=save_maps,
                 limit=args.limit,
             )
-            expected = per_case_path(
-                config, step["fold"], step["seed"], output_dir=eval_dir
+            if expectations is None:
+                expectations = (
+                    len(build_dataset(config, split=split)),
+                    [method.name for method in methods_from_config(config)],
+                )
+            n_cases, expected_methods = expectations
+            candidates = _per_case_candidates(
+                dataset_dir, step["model_path"], dataset_name, step["fold"], step["seed"]
             )
-            if args.aggregate_only or (expected.is_file() and not args.force):
-                # resume: the run already wrote its per-case CSV, do not spend GPU time again
-                print(f"[{step['model']} fold{step['fold']} seed{step['seed']}] exists, skipped")
+            expected, complete, reason = resolve_per_case(
+                candidates,
+                n_cases=n_cases,
+                methods=expected_methods,
+                model_stem=step["model_path"].stem,
+            )
+            if args.aggregate_only:
+                print(f"[{step['model']} fold{step['fold']} seed{step['seed']}] aggregate only")
                 continue
+            if complete and not args.force:
+                # resume: a *finished* run (all cases, all methods) is never redone
+                print(f"[{step['model']} fold{step['fold']} seed{step['seed']}] complete, skipped")
+                continue
+            if complete is False and candidates[0].is_file():
+                print(
+                    f"[{step['model']} fold{step['fold']} seed{step['seed']}] "
+                    f"incomplete ({reason}), re-evaluating"
+                )
             print(
                 f"[{step['model']} fold{step['fold']} seed{step['seed']}] evaluating",
                 flush=True,
@@ -385,7 +499,14 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             print(f"  -> {result.n_cases} cases -> {result.per_case_csv.name}")
 
-        frames = _frames_by_model(external, steps, dataset_name, dataset_dir)
+        frames = _frames_by_model(
+            external,
+            steps,
+            dataset_name,
+            dataset_dir,
+            n_cases=expectations[0] if expectations else 0,
+            expected_methods=expectations[1] if expectations else (),
+        )
         if not frames:
             print(f"ERROR: no per-case results for {dataset_name}", file=sys.stderr)
             return 2

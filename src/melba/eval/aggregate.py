@@ -315,6 +315,11 @@ def compare_methods(
     pooled = pool_folds([frame])
     tables: list[pd.DataFrame] = []
     for treatment, control in pairs:
+        if treatment == control:
+            raise ValueError(
+                f"cannot compare method {treatment!r} with itself: a treatment must differ from "
+                "the control (check the 'treatments'/'control' settings)"
+            )
         table = analyze_long(
             pooled,
             treatment=treatment,
@@ -714,8 +719,17 @@ def aggregate_all(
             for method in frame["method"].unique()
         }
     )
-    pairs = [(treatment, control) for treatment in treatments if treatment in methods]
+    pairs = [
+        (treatment, control)
+        for treatment in treatments
+        if treatment in methods and treatment != control
+    ]
     notes: list[str] = []
+    if any(treatment == control for treatment in treatments):
+        notes.append(
+            f"skipped the degenerate comparison {control!r} vs itself "
+            f"(the control is never one of its own treatments)"
+        )
     tables: dict[str, pd.DataFrame] = {}
     tables["pooled_by_seed"] = pooled_seed_table(
         by_seed, unit=unit, metrics=quality_metrics
@@ -890,7 +904,9 @@ def aggregate_all(
             ensemble_pairs = [
                 (treatment, comparison_control)
                 for treatment, comparison_control in ensemble_pairs
-                if treatment in present and comparison_control in present
+                if treatment in present
+                and comparison_control in present
+                and treatment != comparison_control
             ]
             tables["ensemble_comparison"] = (
                 compare_methods(

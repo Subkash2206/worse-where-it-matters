@@ -133,6 +133,13 @@ def test_pooled_paired_tests_and_detection(frames_by_seed) -> None:
     assert detection.loc[detection["method"] == "baseline", "n_cases"].iloc[0] == 12
 
 
+def test_compare_methods_rejects_a_method_compared_with_itself(frames_by_seed) -> None:
+    """The 'vs tta4' grids once compared tta4 with itself and died on a float conversion."""
+    averaged = seed_averaged_frame(frames_by_seed)
+    with pytest.raises(ValueError, match="with itself"):
+        compare_methods(averaged, [("tta4", "tta4")], metrics=["dice"])
+
+
 def test_ensemble_frame_averages_probability_maps(toy_dataset_config, tmp_path) -> None:
     gt_mask = np.zeros((8, 8), dtype=np.float32)
     gt_mask[2:4, 2:4] = 1.0

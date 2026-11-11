@@ -1,0 +1,71 @@
+# -----------------------------------------------------------------------------
+# Recovery queue after the Windows Update restart of 2026-11-11 06:20.
+#
+# What died: external_swin_runs (started 05:05) and external_intensity4 (started 23:28) were both
+# running when the machine rebooted - the external_swin wait guard had expired at 05:05, so two
+# GPU jobs shared the card.  Nothing survived: the SwinUNETR queue had finished 0 of its 45 runs
+# (one truncated kvasir CSV) and the intensity queue's external step had 40 finished runs plus one
+# truncated CSV, all of which had to be re-evaluated.
+#
+# This queue is the *only* GPU job: no wait_for_pid_file, one step at a time, and every step
+# resumes from the per-case CSVs that are complete (all cases x all methods; scripts/
+# evaluate_external.py now verifies that instead of trusting the file's existence).
+#
+#   1. external_swin_runs        45 runs  (15 checkpoints x 3 datasets, SwinUNETR)
+#   2. external_aggregate_both   pools the 15 UNet + 15 SwinUNETR checkpoints per dataset
+#   3. external_intensity4       45 runs  (15 checkpoints x 3 datasets, UNet + intensity4)
+#   4. external_intensity4_agg   re-pools the intensity4 tree
+#
+# Time estimate from the per-checkpoint timings already logged (run.json deltas):
+#   swin:  UNet 15-view per-checkpoint medians (kvasir 1503 s, colondb 135 s, etis 540 s) x the
+#          internal Swin/UNet cost ratio 1.42  ->  ~2139 / 192 / 768 s per checkpoint
+#          = 15 x 3099 s ~ 12.9 h (up to ~19 h if the Swin/UNet ratio is closer to the 2.2 seen
+#          while it shared the GPU yesterday)
+#   agg:   ~10 min per dataset -> ~0.5 h
+#   int4:  measured medians 975 / 309 / 364 s per checkpoint = 15 x 1648 s ~ 6.9 h
+#   total: ~20.3 h (range 20-27 h)
+# -----------------------------------------------------------------------------
+name: external_recovery
+
+steps:
+  - name: external_swin_runs
+    kind: external
+    config: configs/external/polyp_external.yaml
+    models: [cvc_clinicdb/swinunetr_2d]
+    datasets: [kvasir_seg, cvc_colondb, etis_larib]
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    n_bootstrap: 10000
+    attempts: 2
+
+  - name: external_aggregate_both
+    kind: external
+    config: configs/external/polyp_external.yaml
+    models: [cvc_clinicdb/unet_resnet50, cvc_clinicdb/swinunetr_2d]
+    datasets: [kvasir_seg, cvc_colondb, etis_larib]
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    n_bootstrap: 10000
+    aggregate_only: true
+
+  - name: external_intensity4
+    kind: external
+    config: configs/external/polyp_external.yaml
+    models: [cvc_clinicdb/unet_resnet50_intensity4]
+    datasets: [kvasir_seg, cvc_colondb, etis_larib]
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    output_dir: results/external_intensity4
+    n_bootstrap: 10000
+    attempts: 2
+
+  - name: external_intensity4_aggregate
+    kind: external
+    config: configs/external/polyp_external.yaml
+    models: [cvc_clinicdb/unet_resnet50_intensity4]
+    datasets: [kvasir_seg, cvc_colondb, etis_larib]
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    output_dir: results/external_intensity4
+    n_bootstrap: 10000
+    aggregate_only: true

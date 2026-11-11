@@ -67,12 +67,12 @@ def test_external_config_prefers_the_dataset_entry(tmp_path) -> None:
 
 
 def test_frames_by_model_reads_what_exists_and_skips_the_rest(tmp_path) -> None:
-    """A finished run is picked up, a missing one is skipped instead of raising."""
+    """Complete runs are picked up (new layout first, then the pre-split one), the rest skipped."""
     external = load_config(CONFIG)
     dataset = "kvasir_seg"
-    evaluation = tmp_path / "evaluation"
+    dataset_dir = tmp_path  # the dataset root: <root>/<model>/evaluation and <root>/evaluation
     steps = []
-    for fold, seed in ((0, 0), (0, 1)):
+    for fold, seed in ((0, 0), (0, 1), (0, 2)):
         steps.append(
             {
                 "dataset": dataset,
@@ -83,36 +83,73 @@ def test_frames_by_model_reads_what_exists_and_skips_the_rest(tmp_path) -> None:
                 "checkpoint": Path("unused.pt"),
             }
         )
-    config = script._external_config(
-        external,
-        MODEL,
-        dataset_name=dataset,
-        checkpoint=Path("unused.pt"),
-        fold=0,
-        seed=0,
-        output_dir=evaluation,
-        save_maps=False,
-        limit=None,
-    )
-    present = per_case_path(config, 0, 0, output_dir=evaluation)
-    present.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(
-        [
-            {
-                "case_id": "case_1",
-                "group_id": "case_1",
-                "method": "baseline",
-                "metric": "dice",
-                "value": 0.5,
-                "split": "test",
-                "fold": 0,
-                "seed": 0,
-                "empty_flag": "both_nonempty",
-                "missed_detection": 0,
-            }
-        ]
-    ).to_csv(present, index=False)
+    methods = ["baseline", "tta2", "tta4", "tta8"]
+    common = {
+        "dataset": dataset,
+        "split": "test",
+        "seed": 0,
+        "group_id": "case_1",
+        "value": 0.5,
+        "empty_flag": "both_nonempty",
+        "missed_detection": 0,
+        "config_path": str(MODEL),
+    }
 
-    frames = script._frames_by_model(external, steps, dataset, evaluation)
-    assert list(frames) == ["cvc_clinicdb/unet_resnet50_fold0_seed0"]
-    assert frames["cvc_clinicdb/unet_resnet50_fold0_seed0"]["case_id"].tolist() == ["case_1"]
+    def write(path: Path, *, folds: tuple[int, ...] = (0,), rows: int = 1) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        records = [
+            {**common, "case_id": "case_1", "fold": fold, "seed": seed, "method": method,
+             "metric": "dice"}
+            for fold, seed in ((0, 0),)
+            for method in methods
+        ][:rows]
+        pd.DataFrame(records).to_csv(path, index=False)
+
+    # (a) the pre-split layout: <root>/evaluation
+    write(dataset_dir / "evaluation" / f"{dataset}_test_fold0_seed0_per_case.csv", rows=len(methods))
+    # (b) the per-model layout: <root>/<model>/evaluation
+    write(
+        dataset_dir / MODEL.stem / "evaluation" / f"{dataset}_test_fold0_seed1_per_case.csv",
+        rows=len(methods),
+    )
+    # (c) a truncated run: only the first two methods made it
+    write(
+        dataset_dir / MODEL.stem / "evaluation" / f"{dataset}_test_fold0_seed2_per_case.csv", rows=2
+    )
+
+    frames = script._frames_by_model(
+        external, steps, dataset, dataset_dir, n_cases=1, expected_methods=methods
+    )
+    assert sorted(frames) == [
+        "cvc_clinicdb/unet_resnet50_fold0_seed0",
+        "cvc_clinicdb/unet_resnet50_fold0_seed1",
+    ]
+    assert frames["cvc_clinicdb/unet_resnet50_fold0_seed0"]["case_id"].tolist() == ["case_1"] * len(
+        methods
+    )
+
+
+def test_per_case_complete_reports_why_a_run_is_incomplete(tmp_path) -> None:
+    """A killed run leaves a short CSV; the resume rule must not trust its existence."""
+    path = tmp_path / "kvasir_seg_test_fold0_seed0_per_case.csv"
+    pd.DataFrame(
+        {
+            "case_id": ["a", "a", "b", "b"],
+            "method": ["baseline", "tta4", "baseline", "tta4"],
+            "config_path": [str(MODEL)] * 4,
+        }
+    ).to_csv(path, index=False)
+    assert script.per_case_complete(path, n_cases=2, methods=["baseline", "tta4"])[0]
+    complete, reason = script.per_case_complete(
+        path, n_cases=3, methods=["baseline", "tta4"]
+    )
+    assert not complete and "case coverage" in reason
+    complete, reason = script.per_case_complete(
+        path, n_cases=2, methods=["baseline", "tta4", "tta8"]
+    )
+    assert not complete and "missing method" in reason
+    # the pre-split fallback only accepts a file the requested architecture produced
+    complete, reason = script.per_case_complete(
+        path, n_cases=2, methods=["baseline", "tta4"], model_stem="swinunetr_2d"
+    )
+    assert not complete and "produced by" in reason
