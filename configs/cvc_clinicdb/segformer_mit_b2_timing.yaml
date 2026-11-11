@@ -1,0 +1,26 @@
+# -----------------------------------------------------------------------------
+# Timing probe only: one epoch of the SegFormer recipe, to size the real grid.
+# Same architecture/recipe as segformer_mit_b2.yaml; a separate experiment name so the
+# probe cannot touch the checkpoint directory of the grid that runs afterwards.
+#
+#   python scripts/train.py --config configs/cvc_clinicdb/segformer_mit_b2_timing.yaml \
+#       --fold 0 --seed 0 --epochs 1
+# -----------------------------------------------------------------------------
+defaults:
+  - segformer_mit_b2.yaml
+
+experiment:
+  name: cvc_clinicdb_segformer_mit_b2_timing
+  description: "Timing probe: one epoch of the SegFormer grid (not a result)"
+
+model:
+  checkpoint: checkpoints/${experiment.name}/fold{fold}_seed{seed}/best.pt
+
+training:
+  epochs: 1
+  early_stopping_patience: 20
+
+evaluation:
+  output_dir: results/${experiment.name}/evaluation
+  save_probability_maps: false
+  probability_map_methods: []

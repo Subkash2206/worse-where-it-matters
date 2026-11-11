@@ -1,0 +1,81 @@
+# -----------------------------------------------------------------------------
+# Detection-safe TTA rules on the *same* UNet checkpoints (Part 1 of the paper's
+# TTA-safety study).
+#
+#   python scripts/run_grid.py --config configs/cvc_clinicdb/unet_resnet50_detrules.yaml \
+#       --folds 0 1 2 3 4 --seeds 0 1 2
+#
+# Nothing is retrained: model.checkpoint still points at the 15 UNet checkpoints of
+# `cvc_clinicdb_unet_resnet50`, so run_grid sees "trained but not evaluated" and only
+# runs the evaluation. The extra methods are *derived* from tta4/tta8 - they reuse those
+# forward passes and only change how the view stack is turned into a binary mask, so the
+# whole evaluation still costs 1+2+4+8 = 15 forward passes per case, exactly like the
+# plain UNet evaluation:
+#
+#   tta{X}_anyview    lesion present if any view or the mean map is non-empty at 0.5;
+#                     mask = mean mask, else identity mask, else union of view masks
+#   tta{X}_lowdet_T   if the mean map peaks at >= T while its 0.5 mask is empty, use the
+#                     mean mask at T; otherwise the plain 0.5 mask
+#
+# T is chosen on these internal results only (scripts/select_detection_rule.py) and then
+# applied unchanged to the external collections.
+# -----------------------------------------------------------------------------
+defaults:
+  - unet_resnet50.yaml
+
+experiment:
+  name: cvc_clinicdb_unet_resnet50_detrules
+  description: "UNet CVC-ClinicDB: TTA with detection-safe decision rules (no retraining)"
+
+tta:
+  aggregator: mean
+  methods:
+    - name: baseline
+      views:
+        - { name: identity, ops: [] }
+
+    - name: tta2
+      views:
+        - { name: identity, ops: [] }
+        - { name: hflip, ops: [{ type: flip, axes: [w] }] }
+
+    - name: tta4
+      views:
+        - { name: identity, ops: [] }
+        - { name: rot180, ops: [{ type: rot90, k: 2, axes: [h, w] }] }
+        - { name: hflip, ops: [{ type: flip, axes: [w] }] }
+        - { name: vflip, ops: [{ type: flip, axes: [h] }] }
+
+    - name: tta8
+      views:
+        - { name: identity, ops: [] }
+        - { name: rot90, ops: [{ type: rot90, k: 1, axes: [h, w] }] }
+        - { name: rot180, ops: [{ type: rot90, k: 2, axes: [h, w] }] }
+        - { name: rot270, ops: [{ type: rot90, k: 3, axes: [h, w] }] }
+        - { name: hflip, ops: [{ type: flip, axes: [w] }] }
+        - { name: hflip_rot90, ops: [{ type: flip, axes: [w] }, { type: rot90, k: 1, axes: [h, w] }] }
+        - { name: hflip_rot180, ops: [{ type: flip, axes: [w] }, { type: rot90, k: 2, axes: [h, w] }] }
+        - { name: hflip_rot270, ops: [{ type: flip, axes: [w] }, { type: rot90, k: 3, axes: [h, w] }] }
+
+    # decision rules: no extra forward passes, parent listed first.
+    # The suffix is the lower detection threshold in percent: lowdet_20 = t 0.20.
+    - { name: tta4_anyview, derived_from: tta4, rule: anyview }
+    - { name: tta4_lowdet_20, derived_from: tta4, rule: lowdet_20 }
+    - { name: tta4_lowdet_30, derived_from: tta4, rule: lowdet_30 }
+    - { name: tta4_lowdet_40, derived_from: tta4, rule: lowdet_40 }
+    - { name: tta8_anyview, derived_from: tta8, rule: anyview }
+    - { name: tta8_lowdet_20, derived_from: tta8, rule: lowdet_20 }
+    - { name: tta8_lowdet_30, derived_from: tta8, rule: lowdet_30 }
+    - { name: tta8_lowdet_40, derived_from: tta8, rule: lowdet_40 }
+
+evaluation:
+  split: test
+  output_dir: results/${experiment.name}/evaluation
+  # no probability maps: nothing downstream needs them for the rules
+  save_probability_maps: false
+  probability_map_methods: []
+
+training:
+  # the 15 UNet checkpoints are reused: the grid must see "trained, evaluation missing",
+  # never "train from scratch" (model.checkpoint already points at the same files)
+  checkpoint_dir: checkpoints/cvc_clinicdb_unet_resnet50

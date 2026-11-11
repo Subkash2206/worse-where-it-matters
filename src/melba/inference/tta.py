@@ -51,12 +51,20 @@ class TTAMethod:
     transforms and the forward passes differ only because dropout is switched on at
     inference (see :mod:`melba.models.dropout`).  The per-sample probability maps go
     through exactly the same aggregation and uncertainty code as geometric views.
+
+    ``derived_from`` marks a *decision rule*: the method reuses the forward passes of the
+    parent method (same views, same aggregator) and only changes how the view stack is
+    turned into a binary mask (see :mod:`melba.inference.rules`).  Such a method costs no
+    extra inference, and its name must be ``<parent>_<rule>`` so that a table row can never
+    hide which parent and which rule produced it.
     """
 
     name: str
     views: tuple[GeometricView, ...]
     aggregator: str = "mean"
     stochastic: bool = False
+    derived_from: str | None = None
+    rule: str | None = None
 
     def __post_init__(self) -> None:
         if not self.views:
@@ -69,6 +77,30 @@ class TTAMethod:
             raise ValueError(
                 f"Stochastic method {self.name!r} needs at least 2 samples to estimate a spread"
             )
+        if self.derived_from is None and self.rule is not None:
+            raise ValueError(f"Method {self.name!r} sets 'rule' without 'derived_from'")
+        if self.derived_from is not None:
+            if self.rule is None:
+                raise ValueError(f"Derived method {self.name!r} needs a 'rule'")
+            from .rules import parse_rule, rule_name
+
+            family, threshold = parse_rule(self.rule)
+            canonical = rule_name(family, threshold)
+            if canonical != self.rule:
+                raise ValueError(
+                    f"Derived method {self.name!r} uses rule {self.rule!r}; write it as "
+                    f"{canonical!r} so the name and the rule cannot disagree"
+                )
+            if self.name != f"{self.derived_from}_{canonical}":
+                raise ValueError(
+                    f"Derived method {self.name!r} must be named "
+                    f"'{self.derived_from}_{canonical}' (parent + rule)"
+                )
+            if self.stochastic:
+                raise ValueError(
+                    f"Derived method {self.name!r} cannot be stochastic: it reuses its parent's "
+                    "forward passes"
+                )
 
     @property
     def n_views(self) -> int:
@@ -77,6 +109,11 @@ class TTAMethod:
     @property
     def view_names(self) -> str:
         return "|".join(view.name for view in self.views)
+
+    @property
+    def is_derived(self) -> bool:
+        """True for a decision rule that reuses another method's forward passes."""
+        return self.derived_from is not None
 
 
 def _method_entries(config: Any) -> list[dict[str, Any]]:
@@ -95,13 +132,26 @@ def methods_from_config(config: Any) -> list[TTAMethod]:
     A method named ``mcdropout`` or ``mcdropout_<T>`` without explicit ``views`` is
     expanded into ``T`` identity views with ``stochastic: true`` (default T = 8), so the
     MC-dropout samples are aggregated and scored exactly like geometric views.
+
+    A *derived* entry (``derived_from: <parent>`` + ``rule: <rule>``) inherits its parent's
+    views and aggregator and costs no extra forward passes; it must appear after its parent
+    in the list, because that is the order in which the runner reuses the computed stack.
     """
     default_aggregator = str(config.get("tta.aggregator", "mean"))
-    methods: list[TTAMethod] = []
+    specs: list[tuple[str, dict[str, Any]]] = []
     for spec in _method_entries(config):
         name = str(spec.get("name") or "").strip()
         if not name:
             raise ConfigError("Every entry of 'tta.methods' needs a 'name'")
+        specs.append((name, dict(spec)))
+
+    methods: list[TTAMethod] = []
+    by_name: dict[str, TTAMethod] = {}
+    pending: list[tuple[str, dict[str, Any]]] = []
+    for name, spec in specs:
+        if spec.get("derived_from"):
+            pending.append((name, spec))
+            continue
         aggregator = str(spec.get("aggregator", default_aggregator)).strip().lower()
         view_specs = list(spec.get("views") or [])
         stochastic = bool(spec.get("stochastic", False))
@@ -118,14 +168,52 @@ def methods_from_config(config: Any) -> list[TTAMethod]:
                     {"name": f"mc_sample_{index + 1}", "ops": []} for index in range(samples)
                 ]
         views = build_views(view_specs)
-        methods.append(
-            TTAMethod(name=name, views=tuple(views), aggregator=aggregator, stochastic=stochastic)
+        method = TTAMethod(
+            name=name, views=tuple(views), aggregator=aggregator, stochastic=stochastic
         )
+        methods.append(method)
+        by_name[name] = method
+
+    for name, spec in pending:
+        parent_name = str(spec.get("derived_from")).strip()
+        parent = by_name.get(parent_name)
+        if parent is None:
+            raise ConfigError(
+                f"Derived TTA method {name!r} refers to unknown or not-yet-defined parent "
+                f"{parent_name!r}; list the parent before the rule (available: {sorted(by_name)})"
+            )
+        if spec.get("views"):
+            raise ConfigError(
+                f"Derived TTA method {name!r} may not declare its own views: it reuses the "
+                f"forward passes of {parent_name!r}"
+            )
+        aggregator = str(spec.get("aggregator", parent.aggregator)).strip().lower()
+        if aggregator != parent.aggregator:
+            raise ConfigError(
+                f"Derived TTA method {name!r} uses aggregator {aggregator!r} but its parent "
+                f"{parent_name!r} uses {parent.aggregator!r}: a rule cannot re-aggregate"
+            )
+        method = TTAMethod(
+            name=name,
+            views=parent.views,
+            aggregator=parent.aggregator,
+            stochastic=parent.stochastic,
+            derived_from=parent.name,
+            rule=str(spec.get("rule") or "").strip().lower() or None,
+        )
+        methods.append(method)
+        by_name[name] = method
+
     names = [method.name for method in methods]
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:
         raise ConfigError(f"Duplicate TTA method name(s): {duplicates}")
-    return methods
+    # Parents first, then the rules: the runner computes a rule from its parent's stack, so
+    # this order is what makes an evaluation legal.  Relative config order is preserved
+    # inside each group, so a derived entry may be written next to its parent.
+    parents = [method for method in methods if not method.is_derived]
+    rules = [method for method in methods if method.is_derived]
+    return parents + rules
 
 
 def logits_to_probabilities(logits: torch.Tensor, activation: str = "sigmoid") -> torch.Tensor:

@@ -30,6 +30,7 @@ from melba.data.brats import place_on_full_grid
 from melba.inference import (
     TTAMethod,
     aggregate_probabilities,
+    apply_rule,
     methods_from_config,
     predict_per_view,
     predict_per_view_tensor,
@@ -63,6 +64,120 @@ TIMING_METRICS: tuple[str, ...] = ("latency_ms", "peak_memory_mb")
 #: distance metrics for which a penalised variant (empty prediction -> image
 #: diagonal) is written as ``<metric>_penalized`` for the sensitivity table
 PENALIZED_SOURCE_METRICS: tuple[str, ...] = ("hd", "hd95", "hd95_pooled", "assd")
+
+
+@dataclass(frozen=True)
+class MethodStack:
+    """What one TTA method produces for one case.
+
+    ``views`` (``n_views, C, *spatial``) and ``aggregated`` (``C, *spatial``) are the raw
+    products of the forward passes; ``mask`` is set only by a derived detection rule, whose
+    mask is not a plain threshold of ``aggregated``.
+    """
+
+    views: np.ndarray
+    aggregated: np.ndarray
+    uncertainty: dict[str, float]
+    latency_ms: float
+    peak_memory_mb: float
+    mask: np.ndarray | None = None
+
+
+def _predict_method_stack(
+    model: Any,
+    image: torch.Tensor,
+    device: torch.device,
+    method: TTAMethod,
+    *,
+    target: np.ndarray,
+    threshold: float,
+    activation: str,
+    amp: bool,
+    sliding_window: dict[str, Any] | None,
+    metric_settings: Any,
+    boundary_band_px: int,
+    timing_enabled: bool,
+    warmup_runs: int,
+) -> MethodStack:
+    """Run one method's forward passes and return its view stack, mean map and uncertainty."""
+    # 3 warm-up passes, then one timed pass (CUDA is synchronised so the measured
+    # wall-clock includes kernel execution time).  Every other run skips warm-ups and
+    # timing, so it is one forward pass per view.
+    if timing_enabled:
+        for _ in range(warmup_runs):
+            predict_per_view(
+                model,
+                image,
+                device,
+                method,
+                activation=activation,
+                amp=amp,
+                sliding_window=sliding_window,
+            )
+        _synchronize(device)
+        _reset_peak_memory(device)
+        started = time.perf_counter()
+    view_tensor = predict_per_view_tensor(
+        model,
+        image,
+        device,
+        method,
+        activation=activation,
+        amp=amp,
+        sliding_window=sliding_window,
+    )
+    if timing_enabled:
+        _synchronize(device)
+        latency_ms = (time.perf_counter() - started) * 1000.0
+        peak_memory_mb = _peak_memory_mb(device)
+    else:
+        latency_ms = float("nan")
+        peak_memory_mb = float("nan")
+
+    if view_tensor.shape[1] != 1:
+        raise ConfigError(
+            "The evaluation runner expects single-channel (binary) predictions; "
+            f"got {view_tensor.shape[1]} channels for method '{method.name}'."
+        )
+    # Uncertainty is a set of reductions over the view stack: do them on the device
+    # (eight scalars cross the bus) instead of copying 15 float64 views to the host first.
+    # Only usable when the views already live on the reference grid, which is the normal
+    # case; otherwise the host copy below is resampled first and the numpy path is used.
+    gpu_uncertainty = None
+    if metric_settings.uncertainty_names and (
+        device.type == "cuda" and tuple(view_tensor.shape[2:]) == tuple(target.shape)
+    ):
+        gpu_uncertainty = compute_view_uncertainty_torch(
+            view_tensor,
+            threshold=threshold,
+            boundary_band_px=boundary_band_px,
+        )
+    view_probabilities = view_tensor.cpu().numpy()
+    del view_tensor
+
+    # Every view is mapped back onto the native reference grid before aggregation, so
+    # quality metrics and uncertainty share a geometry.
+    native_views = np.stack(
+        [resample_probability_map(view_map, target.shape)[0] for view_map in view_probabilities]
+    )
+    aggregated = aggregate_probabilities(native_views[:, None], method.aggregator)[0]
+    if gpu_uncertainty is not None:
+        uncertainty = gpu_uncertainty
+    elif metric_settings.uncertainty_names:
+        uncertainty = compute_view_uncertainty(
+            native_views[:, None],
+            threshold=threshold,
+            boundary_band_px=boundary_band_px,
+        )
+    else:
+        uncertainty = {}
+    return MethodStack(
+        views=native_views,
+        aggregated=aggregated,
+        uncertainty=uncertainty,
+        latency_ms=latency_ms,
+        peak_memory_mb=peak_memory_mb,
+    )
 
 
 @dataclass(frozen=True)
@@ -371,75 +486,52 @@ def run_evaluation(
             group_id = str(sample.get("group_id", case_id))
             groups.add(group_id)
 
+            # Derived detection rules reuse the forward passes of their parent method, so
+            # each computed stack is kept for the rest of the case.
+            stacks: dict[str, MethodStack] = {}
             for method in methods:
-                # 3 warm-up passes, then one timed pass (CUDA is synchronised so the
-                # measured wall-clock includes kernel execution time).  Every other run
-                # skips warm-ups and timing, so it is one forward pass per view.
-                if timing_enabled:
-                    for _ in range(warmup_runs):
-                        predict_per_view(
-                            model,
-                            image,
-                            device,
-                            method,
-                            activation=activation,
-                            amp=amp,
-                            sliding_window=sliding_window,
+                if method.is_derived:
+                    parent = stacks.get(str(method.derived_from))
+                    if parent is None:
+                        raise ConfigError(
+                            f"Derived TTA method {method.name!r} needs "
+                            f"{method.derived_from!r} to be evaluated first"
                         )
-                    _synchronize(device)
-                    _reset_peak_memory(device)
-                    started = time.perf_counter()
-                view_tensor = predict_per_view_tensor(
-                    model,
-                    image,
-                    device,
-                    method,
-                    activation=activation,
-                    amp=amp,
-                    sliding_window=sliding_window,
-                )
-                if timing_enabled:
-                    _synchronize(device)
-                    latency_ms = (time.perf_counter() - started) * 1000.0
-                    peak_memory_mb = _peak_memory_mb(device)
+                    stack = MethodStack(
+                        views=parent.views,
+                        aggregated=parent.aggregated,
+                        uncertainty=parent.uncertainty,
+                        latency_ms=float("nan"),
+                        peak_memory_mb=float("nan"),
+                        mask=apply_rule(
+                            str(method.rule),
+                            parent.aggregated,
+                            parent.views,
+                            threshold=threshold,
+                        ),
+                    )
                 else:
-                    latency_ms = float("nan")
-                    peak_memory_mb = float("nan")
-
-                if view_tensor.shape[1] != 1:
-                    raise ConfigError(
-                        "The evaluation runner expects single-channel (binary) predictions; "
-                        f"got {view_tensor.shape[1]} channels for method '{method.name}'."
-                    )
-                # Uncertainty is a set of reductions over the view stack: do them on the
-                # device (eight scalars cross the bus) instead of copying 15 float64 views
-                # to the host first.  Only usable when the views already live on the
-                # reference grid, which is the normal case; otherwise the host copy below
-                # is resampled first and the numpy path is used.
-                gpu_uncertainty = None
-                if metric_settings.uncertainty_names and (
-                    device.type == "cuda"
-                    and tuple(view_tensor.shape[2:]) == tuple(target.shape)
-                ):
-                    gpu_uncertainty = compute_view_uncertainty_torch(
-                        view_tensor,
+                    stack = _predict_method_stack(
+                        model,
+                        image,
+                        device,
+                        method,
+                        target=target,
                         threshold=threshold,
+                        activation=activation,
+                        amp=amp,
+                        sliding_window=sliding_window,
+                        metric_settings=metric_settings,
                         boundary_band_px=boundary_band_px,
+                        timing_enabled=timing_enabled,
+                        warmup_runs=warmup_runs,
                     )
-                view_probabilities = view_tensor.cpu().numpy()
-                del view_tensor
-
-                # Every view is mapped back onto the native reference grid before
-                # aggregation, so quality metrics and uncertainty share a geometry.
-                native_views = np.stack(
-                    [
-                        resample_probability_map(view_map, target.shape)[0]
-                        for view_map in view_probabilities
-                    ]
-                )
-                aggregated = aggregate_probabilities(
-                    native_views[:, None], method.aggregator
-                )[0]
+                    stacks[method.name] = stack
+                native_views = stack.views
+                aggregated = stack.aggregated
+                uncertainty = stack.uncertainty
+                latency_ms = stack.latency_ms
+                peak_memory_mb = stack.peak_memory_mb
                 # Metrics are computed where the data is: the BraTS cache already hands out
                 # brain-cropped arrays, and compute_case_metrics() additionally restricts
                 # itself to the union bounding box of prediction and reference (plus a
@@ -455,17 +547,8 @@ def run_evaluation(
                     threshold=threshold,
                     settings=metric_settings,
                     penalty_shape=sample.get("original_size"),
+                    pred_mask=stack.mask,
                 )
-                if gpu_uncertainty is not None:
-                    uncertainty = gpu_uncertainty
-                elif metric_settings.uncertainty_names:
-                    uncertainty = compute_view_uncertainty(
-                        native_views[:, None],
-                        threshold=threshold,
-                        boundary_band_px=boundary_band_px,
-                    )
-                else:
-                    uncertainty = {}
 
                 values: dict[str, float] = {
                     name: metrics[name] for name in metric_settings.gt_names
@@ -517,9 +600,15 @@ def run_evaluation(
 
                 keep_maps = map_case_ids is None or case_id in map_case_ids
                 if save_maps and method.name in map_methods and keep_maps:
+                    # a detection rule has no mean map of its own: save the mask it decided
+                    saved = (
+                        aggregated
+                        if stack.mask is None
+                        else stack.mask.astype(np.float32)
+                    )
                     np.save(
                         map_dir / f"{case_id}__{method.name}__mean.npy",
-                        aggregated.astype(np.float16),
+                        saved.astype(np.float16),
                     )
                     if save_variance:
                         np.save(
@@ -679,6 +768,8 @@ def _finalise(
                 "n_views": method.n_views,
                 "stochastic": method.stochastic,
                 "views": [view.name for view in method.views],
+                "derived_from": method.derived_from,
+                "rule": method.rule,
             }
             for method in methods
         ],

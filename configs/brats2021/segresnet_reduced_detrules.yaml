@@ -1,0 +1,76 @@
+# -----------------------------------------------------------------------------
+# Detection-safe TTA rules on the *same* BraTS checkpoints (Part 1c): the 3D twin of
+# configs/cvc_clinicdb/unet_resnet50_detrules.yaml.
+#
+#   python scripts/run_grid.py --config configs/brats2021/segresnet_reduced_detrules.yaml \
+#       --folds 0 1 2 3 4 --seeds 0
+#
+# Nothing is retrained: model.checkpoint points at the five reduced-protocol SegResNet
+# checkpoints, so run_grid only re-runs the test evaluation. The rules cost no extra
+# sliding-window passes (they reuse the tta4/tta8 view stacks).
+#
+# What this run answers: on the patients without an enhancing tumour the rules *can* only
+# hurt - any rescued "detection" is a false positive - so the false-positive rate on the
+# lesion-free patients and the missed-ET rate must be weighed against each other.
+# -----------------------------------------------------------------------------
+defaults:
+  - segresnet_reduced.yaml
+
+experiment:
+  name: brats2021_segresnet_reduced_detrules
+  description: "BraTS 2021 ET 3D: TTA with detection-safe decision rules (no retraining)"
+
+model:
+  # the five reduced-protocol checkpoints of brats2021_segresnet_reduced, reused as they are
+  checkpoint: checkpoints/brats2021_segresnet_reduced/fold{fold}_seed{seed}/best.pt
+
+tta:
+  aggregator: mean
+  methods:
+    - name: baseline
+      views:
+        - { name: identity, ops: [] }
+
+    - name: tta2
+      views:
+        - { name: identity, ops: [] }
+        - { name: wflip, ops: [{ type: flip, axes: [w] }] }
+
+    - name: tta4
+      views:
+        - { name: identity, ops: [] }
+        - { name: rot180, ops: [{ type: rot90, k: 2, axes: [h, w] }] }
+        - { name: hflip, ops: [{ type: flip, axes: [h] }] }
+        - { name: wflip, ops: [{ type: flip, axes: [w] }] }
+
+    - name: tta8
+      views:
+        - { name: identity, ops: [] }
+        - { name: rot180, ops: [{ type: rot90, k: 2, axes: [h, w] }] }
+        - { name: hflip, ops: [{ type: flip, axes: [h] }] }
+        - { name: wflip, ops: [{ type: flip, axes: [w] }] }
+        - { name: dflip, ops: [{ type: flip, axes: [d] }] }
+        - { name: dflip_rot180, ops: [{ type: flip, axes: [d] }, { type: rot90, k: 2, axes: [h, w] }] }
+        - { name: dflip_hflip, ops: [{ type: flip, axes: [d] }, { type: flip, axes: [h] }] }
+        - { name: dflip_wflip, ops: [{ type: flip, axes: [d] }, { type: flip, axes: [w] }] }
+
+    # the suffix is the lower detection threshold in percent: lowdet_20 = t 0.20
+    - { name: tta4_anyview, derived_from: tta4, rule: anyview }
+    - { name: tta4_lowdet_20, derived_from: tta4, rule: lowdet_20 }
+    - { name: tta4_lowdet_30, derived_from: tta4, rule: lowdet_30 }
+    - { name: tta4_lowdet_40, derived_from: tta4, rule: lowdet_40 }
+    - { name: tta8_anyview, derived_from: tta8, rule: anyview }
+    - { name: tta8_lowdet_20, derived_from: tta8, rule: lowdet_20 }
+    - { name: tta8_lowdet_30, derived_from: tta8, rule: lowdet_30 }
+    - { name: tta8_lowdet_40, derived_from: tta8, rule: lowdet_40 }
+
+evaluation:
+  split: test
+  output_dir: results/${experiment.name}/evaluation
+  save_probability_maps: false
+  probability_map_methods: []
+  save_variance_maps: false
+
+training:
+  # reuse the five reduced-protocol checkpoints: the grid sees "trained, evaluation missing"
+  checkpoint_dir: checkpoints/brats2021_segresnet_reduced

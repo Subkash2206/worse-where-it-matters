@@ -52,6 +52,8 @@ DATASETS = ("kvasir_seg", "cvc_colondb", "etis_larib")
 FAMILIES = {
     "unet_resnet50": "cvc_clinicdb_unet_resnet50",
     "swinunetr_2d": "cvc_clinicdb_swinunetr_2d",
+    # ImageNet-pretrained transformer arm: same 5 folds x 3 seeds, same TTA methods
+    "segformer_mit_b2": "cvc_clinicdb_segformer_mit_b2",
 }
 METHODS = ("baseline", "tta2", "tta4", "tta8")
 TREATMENTS = ("tta2", "tta4", "tta8")

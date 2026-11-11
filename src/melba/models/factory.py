@@ -27,6 +27,7 @@ __all__ = [
 
 MODEL_ARCHITECTURES: tuple[str, ...] = (
     "smp_unet",
+    "smp_segformer",
     "monai_segresnet",
     "segresnet_3d",
     "monai_swinunetr",
@@ -97,6 +98,28 @@ def build_model(config: Config) -> nn.Module:
             from .dropout import attach_decoder_dropout
 
             attach_decoder_dropout(model, decoder_dropout_p)
+        return model
+
+    if architecture == "smp_segformer":
+        # ImageNet-pretrained transformer encoder (SegFormer, MiT-B2): the counterpart of the
+        # ResNet-50 UNet, so the architecture comparison is "convolutional vs transformer at
+        # equal training recipe" rather than "pretrained vs from scratch".
+        import segmentation_models_pytorch as smp
+
+        weights = config.get("model.encoder_weights")
+        encoder_weights = (
+            None
+            if weights is None or str(weights).strip().lower() in {"none", "null", "false"}
+            else str(weights)
+        )
+        model = smp.Segformer(
+            encoder_name=str(config.get("model.encoder", "mit_b2")),
+            encoder_weights=encoder_weights,
+            in_channels=in_channels,
+            classes=num_classes,
+            activation=None,
+        )
+        _attach_encoder_dropout(model, dropout_p)
         return model
 
     if architecture == "monai_segresnet" or architecture == "segresnet_3d":

@@ -1,0 +1,47 @@
+# -----------------------------------------------------------------------------
+# CVC-ClinicDB, SegFormer (segmentation_models_pytorch) with an ImageNet-pretrained
+# MiT-B2 transformer encoder.
+#
+#   python scripts/run_grid.py --config configs/cvc_clinicdb/segformer_mit_b2.yaml \
+#       --folds 0 1 2 3 4 --seeds 0 1 2 --epochs 100 --patience 20
+#
+# Everything except the architecture is inherited unchanged from unet_resnet50.yaml, so
+# the comparison is a like-for-like one: same 5 folds x 3 seeds, same video-level splits,
+# AdamW lr 1e-4 with weight decay 0, cosine schedule, 100 epochs, patience 20, AMP,
+# ImageNet normalisation (mean/std resolved from the mit_b2 encoder by smp), same
+# geometric + intensity augmentation and the same 1/2/4/8-view TTA methods.
+#
+# smp 0.5.0 builds `smp.Segformer(encoder_name='mit_b2')` (24.7 M parameters), so no
+# fallback to Unet/FPN was needed.
+# -----------------------------------------------------------------------------
+defaults:
+  - unet_resnet50.yaml
+
+experiment:
+  name: cvc_clinicdb_segformer_mit_b2
+  description: "CVC-ClinicDB: SegFormer (MiT-B2, ImageNet) - the transformer arm of the model comparison"
+
+model:
+  architecture: smp_segformer
+  encoder: mit_b2
+  encoder_weights: imagenet
+  in_channels: 3
+  num_classes: 1
+  checkpoint: checkpoints/cvc_clinicdb_segformer_mit_b2/fold{fold}_seed{seed}/best.pt
+  selection_split: val
+
+training:
+  epochs: 100
+  batch_size: 8                  # measured: see logs/segformer_timing.log
+  learning_rate: 1.0e-4
+  weight_decay: 0.0
+  scheduler: cosine
+  amp: true
+  early_stopping_patience: 20
+  monitor: val_dice
+
+evaluation:
+  split: test
+  output_dir: results/${experiment.name}/evaluation
+  write_summary: true
+  allow_selection_split: false

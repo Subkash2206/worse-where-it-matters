@@ -327,7 +327,8 @@ def main() -> int:
     ax.set_xlabel("domain gap: baseline Dice below its own internal baseline  [%]")
     ax.set_ylabel("absolute TTA-8 Dice gain")
     ax.set_title(
-        "Under shift, the TTA gain grows for UNet and vanishes for SwinUNETR", fontsize=7.6
+        "Under shift, the TTA gain holds or grows for UNet and shrinks to a third for SwinUNETR",
+        fontsize=7.0,
     )
     if len(families) > 1:
         ax.legend(loc="upper left", fontsize=6, title="architecture", title_fontsize=6)

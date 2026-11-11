@@ -1,0 +1,125 @@
+# -----------------------------------------------------------------------------
+# Part 1 (detection-safe TTA rules) then Part 2 (SegFormer), strictly sequential.
+#
+#   python scripts/run_queue.py --queue queues/paper_rules_segformer.yaml --dry-run
+#   Start-Process -WindowStyle Hidden python -ArgumentList 'scripts/run_queue.py','--queue','queues/paper_rules_segformer.yaml'
+#
+# One GPU job at a time is the hard constraint: every step below runs to completion before
+# the next starts, each grid step spawns one child process per run with its own retries,
+# and both grids resume from last.pt and from complete per-case CSVs.  Part 1 only
+# re-evaluates *existing* checkpoints (same `model.checkpoint` paths), so nothing is
+# retrained there; Part 2 trains the SegFormer grid.
+#
+# Order matters: the lowdet threshold is selected from the internal CVC results before any
+# external or BraTS number is looked at, and the SegFormer grid is trained seed by seed so
+# partial results (seed 0 of every fold) are usable before the last seed finishes.
+# -----------------------------------------------------------------------------
+name: paper_rules_segformer
+max_wait_hours: 1
+
+steps:
+  # ---------------------------------------------------------------- Part 1a: internal CVC
+  - name: part1a_internal_detrules
+    kind: grid
+    config: configs/cvc_clinicdb/unet_resnet50_detrules.yaml
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    attempts: 2
+    estimate_hours: 1.0
+
+  # ---------------------------------------------------------------- Part 1a: choose t
+  - name: part1a_select_rule
+    kind: script
+    script: scripts/select_detection_rule.py
+    estimate_minutes: 2
+
+  # ---------------------------------------------------------------- Part 1b: external
+  - name: part1b_external_detrules
+    kind: external
+    config: configs/external/polyp_external.yaml
+    models: [cvc_clinicdb/unet_resnet50_detrules]
+    datasets: [kvasir_seg, cvc_colondb, etis_larib]
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    output_dir: results/detrules
+    attempts: 2
+    estimate_hours: 4.0
+
+  # ---------------------------------------------------------------- Part 1c: BraTS (3D)
+  - name: part1c_brats_detrules
+    kind: grid
+    config: configs/brats2021/segresnet_reduced_detrules.yaml
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0]
+    attempts: 2
+    estimate_hours: 17.0
+
+  # ---------------------------------------------------------------- Part 1: the report
+  - name: part1_report
+    kind: script
+    script: scripts/detection_rules_report.py
+    estimate_minutes: 10
+
+  # ---------------------------------------------------------------- Part 2: SegFormer training
+  # seed by seed, all five folds inside each step, so seed 0 is complete before seed 1 starts
+  - name: part2_segformer_seed0
+    kind: grid
+    config: configs/cvc_clinicdb/segformer_mit_b2.yaml
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0]
+    epochs: 100
+    patience: 20
+    attempts: 2
+    estimate_hours: 7.5
+
+  - name: part2_segformer_seed1
+    kind: grid
+    config: configs/cvc_clinicdb/segformer_mit_b2.yaml
+    folds: [0, 1, 2, 3, 4]
+    seeds: [1]
+    epochs: 100
+    patience: 20
+    attempts: 2
+    estimate_hours: 7.5
+
+  - name: part2_segformer_seed2
+    kind: grid
+    config: configs/cvc_clinicdb/segformer_mit_b2.yaml
+    folds: [0, 1, 2, 3, 4]
+    seeds: [2]
+    epochs: 100
+    patience: 20
+    attempts: 2
+    estimate_hours: 7.5
+
+  # ---------------------------------------------------------------- Part 2: aggregation
+  - name: part2_aggregate
+    kind: aggregate
+    config: configs/cvc_clinicdb/segformer_mit_b2.yaml
+    seeds: [0, 1, 2]
+    estimate_minutes: 15
+
+  - name: part2_compare
+    kind: compare
+    configs:
+      - configs/cvc_clinicdb/unet_resnet50.yaml
+      - configs/cvc_clinicdb/swinunetr_2d.yaml
+      - configs/cvc_clinicdb/segformer_mit_b2.yaml
+    labels: [UNet, SwinUNETR, SegFormer]
+    estimate_minutes: 2
+
+  - name: part2_external
+    kind: external
+    config: configs/external/polyp_external.yaml
+    models: [cvc_clinicdb/segformer_mit_b2]
+    datasets: [kvasir_seg, cvc_colondb, etis_larib]
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    attempts: 2
+    # measured: ~2.2 s/case for mit_b2 (5x the UNet), 15 checkpoints x (1000+380+196) cases
+    estimate_hours: 14.0
+
+  - name: part2_external_by_model
+    kind: script
+    script: scripts/external_by_model.py
+    estimate_minutes: 15

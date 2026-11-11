@@ -64,6 +64,7 @@ STEP_KINDS: tuple[str, ...] = (
     "evaluate",
     "subgroup",
     "external",
+    "script",
 )
 
 
@@ -101,6 +102,8 @@ def load_queue(path: str | Path) -> dict[str, Any]:
             raise ValueError(f"{source}: step '{name}' needs at least two 'configs'")
         if kind == "subgroup" and not step.get("models"):
             raise ValueError(f"{source}: step '{name}' needs a 'models' list")
+        if kind == "script" and not step.get("script"):
+            raise ValueError(f"{source}: step '{name}' (kind script) needs a 'script' path")
         step["name"] = name
         step["kind"] = kind
     resolved = dict(data)
@@ -226,6 +229,16 @@ def step_command(step: Mapping[str, Any], *, python: str = sys.executable) -> li
             command += ["--output-dir", str(step["output_dir"])]
         if step.get("aggregate_only"):
             command += ["--aggregate-only"]
+        return command
+    if kind == "script":
+        # a plain CPU post-processing script (reports, rule selection, custom aggregation)
+        script = Path(str(step["script"]))
+        command = [
+            python,
+            "-u",
+            str(script if script.is_absolute() else _REPO_ROOT / script),
+        ]
+        command += [str(part) for part in (step.get("args") or [])]
         return command
     command = [
         python,

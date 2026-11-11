@@ -152,6 +152,7 @@ def compute_case_metrics(
     penalty_shape: Sequence[int] | None = None,
     restrict_to_bbox: bool = True,
     bbox_margin: int | None = None,
+    pred_mask: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """Compute the configured ground-truth metrics for one prediction/reference pair.
 
@@ -184,6 +185,10 @@ def compute_case_metrics(
     bbox_margin:
         Background rim kept around the box, in voxels.  Defaults to a rim wide enough for
         the boundary-F1 tolerance, so cropped and full-grid values agree exactly.
+    pred_mask:
+        Pre-decided binary mask (boolean or 0/1).  Used by the detection-rule methods,
+        whose mask is not a plain threshold of one probability map; when given, ``pred``
+        is ignored for the mask and the threshold is not applied to it.
 
     Returns
     -------
@@ -191,7 +196,15 @@ def compute_case_metrics(
         One entry per requested ground-truth metric plus ``empty_flag``.
     """
     settings = settings or MetricSettings()
-    pred_bin = as_binary(pred, threshold)
+    if pred_mask is not None:
+        pred_bin = np.asarray(pred_mask)
+        pred_bin = np.ascontiguousarray(pred_bin.astype(bool, copy=False))
+        if pred_bin.shape != np.shape(target):
+            raise ValueError(
+                f"pred_mask shape {pred_bin.shape} differs from the reference {np.shape(target)}"
+            )
+    else:
+        pred_bin = as_binary(pred, threshold)
     target_bin = as_binary(target, threshold)
     if pred_bin.shape != target_bin.shape:
         raise ValueError(f"pred and target shapes differ: {pred_bin.shape} vs {target_bin.shape}")
