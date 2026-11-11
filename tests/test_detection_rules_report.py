@@ -208,7 +208,58 @@ def test_false_positive_table_is_empty_without_the_reference_method() -> None:
     assert report.false_positive_table(_frame(rows), ["tta8_anyview"], reference="tta8").empty
 
 
+def _paired_frame_rows() -> list[dict]:
+    """Eight cases: four where every method finds the polyp, four where tta8 misses it.
+
+    A missed lesion has no HD95 at all, so the paired distance can only be computed on the
+    four shared cases - and that is exactly what the two case sets must show.
+    """
+    rows = []
+    for index in range(8):
+        case = f"c{index}"
+        missed = index >= 4
+        rows.append(_row(case, "baseline", "dice", 0.6, flag="both_nonempty"))
+        rows.append(_row(case, "baseline", "boundary_f1", 0.4, flag="both_nonempty"))
+        rows.append(_row(case, "baseline", "hd95", 15.0, flag="both_nonempty"))
+        rows.append(_row(case, "baseline", "hd95_penalized", 15.0, flag="both_nonempty"))
+        rows.append(_row(case, "tta8", "dice", 0.0 if missed else 0.7, flag="pred_empty" if missed else "both_nonempty"))
+        rows.append(_row(case, "tta8", "boundary_f1", float("nan") if missed else 0.5, flag="pred_empty" if missed else "both_nonempty"))
+        rows.append(_row(case, "tta8", "hd95", float("nan") if missed else 12.0, flag="pred_empty" if missed else "both_nonempty"))
+        rows.append(_row(case, "tta8", "hd95_penalized", 500.0 if missed else 12.0, flag="pred_empty" if missed else "both_nonempty"))
+    return rows
+
+
 def test_load_dir_refuses_an_empty_directory(tmp_path) -> None:
     with pytest.raises(SystemExit, match="no per-case CSVs"):
         report.load_dir(tmp_path)
+
+
+def test_paired_block_is_empty_without_the_control() -> None:
+    frame = report.unit_averaged(_frame(_paired_frame_rows()), "case")
+    assert report.paired_block(frame, "missing", ["tta8"], unit="case", n_bootstrap=10, seed=0).empty
+
+
+def test_paired_block_reports_both_case_sets() -> None:
+    """The same comparison must appear twice: paired distances, and all cases penalised."""
+    frame = report.unit_averaged(_frame(_paired_frame_rows()), "case")
+    table = report.paired_block(
+        frame, "baseline", ["tta8"], unit="case", n_bootstrap=50, seed=7
+    )
+    assert set(table["case_set"]) == {"both_nonempty", "all"}
+    paired = table.loc[table["case_set"] == "both_nonempty"]
+    all_cases = table.loc[table["case_set"] == "all"]
+    # the paired distance sees only the four cases both methods segmented
+    assert set(paired["metric"]) == {"dice", "boundary_f1", "hd95"}
+    hd95 = paired.loc[paired["metric"] == "hd95"].iloc[0]
+    assert hd95["n_pairs"] == 4
+    assert hd95["mean_treatment"] == pytest.approx(12.0)
+    # the all-case block keeps the four misses through the penalised distance
+    assert "hd95_penalized" in set(all_cases["metric"])
+    penalized = all_cases.loc[all_cases["metric"] == "hd95_penalized"].iloc[0]
+    assert penalized["n_pairs"] == 8
+    assert penalized["mean_treatment"] == pytest.approx((12.0 * 4 + 500.0 * 4) / 8)
+    assert penalized["delta_mean"] > 0  # the misses are charged, not dropped
+    # Dice is reported in both blocks, so the miss cannot be hidden in either
+    assert "dice" in set(paired["metric"]) and "dice" in set(all_cases["metric"])
+
 

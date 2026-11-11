@@ -14,7 +14,14 @@ silences without giving up the Dice/HD95 gain?
 
 Every comparison is against the plain ``baseline`` **and** against plain ``tta4``/``tta8``,
 with a paired Wilcoxon test, a 95 % bootstrap interval of the mean difference and Holm
-adjustment across the compared rules.  Tables go to ``results/detection_rules``.
+adjustment across the compared rules - and it is reported in **two case sets**:
+
+* ``both_nonempty``: Dice, BF1 and HD95 on the cases where both methods predicted something,
+  which is the only honest paired distance (a missed lesion has no surface at all);
+* ``all``: the same over every case, with ``hd95_penalized`` as the distance, so an empty
+  prediction is charged the image diagonal instead of being dropped.
+
+Tables go to ``results/detection_rules``.
 
 Usage
 -----
@@ -40,7 +47,18 @@ from melba.stats.detection import mcnemar_exact  # noqa: E402
 from melba.stats.paired import analyze_long  # noqa: E402
 from melba.utils import git_revision  # noqa: E402
 
-METRICS = ("dice", "boundary_f1", "hd95")
+METRICS = ("dice", "boundary_f1", "hd95", "hd95_penalized")
+#: paired comparison restricted to cases where **both** methods predicted something: the
+#: only honest paired set for a distance, because a missed lesion would otherwise look like
+#: a perfect distance (it has no surface at all)
+PAIRED_METRICS = ("dice", "boundary_f1", "hd95")
+#: the all-case block.  ``hd95_penalized`` charges an empty prediction the image diagonal, so
+#: every case contributes and the price of a rescue/regression cannot hide by being dropped.
+ALL_CASE_METRICS = ("dice", "boundary_f1", "hd95", "hd95_penalized")
+CASE_SETS = (
+    ("both_nonempty", PAIRED_METRICS, "both_nonempty"),
+    ("all", ALL_CASE_METRICS, "all"),
+)
 INTERNAL = _REPO_ROOT / "results" / "cvc_clinicdb_unet_resnet50_detrules" / "evaluation"
 EXTERNAL_ROOT = _REPO_ROOT / "results" / "detrules"
 BRATS = _REPO_ROOT / "results" / "brats2021_segresnet_reduced_detrules" / "evaluation"
@@ -135,38 +153,50 @@ def paired_block(
     n_bootstrap: int,
     seed: int,
 ) -> pd.DataFrame:
-    """Paired tests of every treatment against one control (Holm inside the block)."""
+    """Paired tests of every treatment against one control, in both case sets.
+
+    Two blocks are produced per comparison and kept side by side:
+
+    * ``case_set="both_nonempty"`` - HD95/BF1/Dice on the cases where **both** methods
+      predicted something.  This is the paired distance comparison: a missed lesion has no
+      surface, so leaving those cases in would reward the method that missed them.
+    * ``case_set="all"`` - the same comparison over every case, with ``hd95_penalized`` as
+      the distance (an empty prediction is charged the image diagonal).  Nothing is dropped,
+      so a rule that rescues a lesion and a rule that invents one both pay for it.
+
+    Dice and BF1 are reported in both blocks because they answer the same question twice: on
+    the paired subset (where a miss is excluded) and on all cases (where it counts, Dice = 0).
+    BF1 has no penalised variant, so a case with an empty mask stays undefined for it in both
+    blocks - that is the metric's definition, not a choice of this script.  Holm correction
+    runs inside each block (across that block's metrics).
+    """
     present = [name for name in treatments if name in set(frame["method"])]
     if control not in set(frame["method"]) or not present:
         return pd.DataFrame()
-    table = analyze_long(
-        frame,
-        treatment=present[0],
-        control=control,
-        metrics=list(METRICS),
-        unit=unit,
-        n_bootstrap=n_bootstrap,
-        seed=seed,
-        correction="holm",
-    )
-    table["treatment"] = present[0]
-    frames = [table]
-    for treatment in present[1:]:
-        part = analyze_long(
-            frame,
-            treatment=treatment,
-            control=control,
-            metrics=list(METRICS),
-            unit=unit,
-            n_bootstrap=n_bootstrap,
-            seed=seed,
-            correction="holm",
-        )
-        part["treatment"] = treatment
-        frames.append(part)
-    combined = pd.concat(frames, ignore_index=True)
-    combined["control"] = control
-    return combined
+    frames: list[pd.DataFrame] = []
+    for case_set, metrics, restriction in CASE_SETS:
+        available = [metric for metric in metrics if metric in set(frame["metric"])]
+        if not available:
+            continue
+        for treatment in present:
+            part = analyze_long(
+                frame,
+                treatment=treatment,
+                control=control,
+                metrics=available,
+                unit=unit,
+                n_bootstrap=n_bootstrap,
+                seed=seed,
+                correction="holm",
+                distance_restriction=restriction,
+            )
+            part["treatment"] = treatment
+            part["control"] = control
+            part["case_set"] = case_set
+            frames.append(part)
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
 
 
 def miss_table(
@@ -295,28 +325,37 @@ def _write(frame: pd.DataFrame, path: Path) -> None:
 
 
 def _print_pairs(table: pd.DataFrame, title: str) -> None:
-    """Compact console view of a paired block (Dice/BF1/HD95 only)."""
+    """Console view of a paired block, one sub-table per case set."""
     if table.empty:
         print(f"\n{title}: no data")
         return
-    view = table.loc[
-        table["metric"].isin(METRICS),
-        [
-            "control",
-            "treatment",
-            "metric",
-            "n_pairs",
-            "mean_control",
-            "mean_treatment",
-            "delta_mean",
-            "ci_low",
-            "ci_high",
-            "p_value",
-            "p_value_adjusted",
-        ],
-    ]
-    print(f"\n{title}")
-    print(view.to_string(index=False, float_format=lambda value: f"{value:.4f}"))
+    for case_set in ("both_nonempty", "all"):
+        block = table.loc[table["case_set"] == case_set]
+        if block.empty:
+            continue
+        view = block.loc[
+            block["metric"].isin(METRICS),
+            [
+                "control",
+                "treatment",
+                "metric",
+                "n_pairs",
+                "mean_control",
+                "mean_treatment",
+                "delta_mean",
+                "ci_low",
+                "ci_high",
+                "p_value",
+                "p_value_adjusted",
+            ],
+        ].sort_values(["treatment", "metric"])
+        label = (
+            "cases non-empty under both methods (paired distances)"
+            if case_set == "both_nonempty"
+            else "all cases (hd95_penalized charges an empty prediction the image diagonal)"
+        )
+        print(f"\n{title} - {label}")
+        print(view.to_string(index=False, float_format=lambda value: f"{value:.4f}"))
 
 
 def _means(frame: pd.DataFrame) -> pd.DataFrame:
@@ -456,6 +495,11 @@ def main(argv: list[str] | None = None) -> int:
     manifest = pd.DataFrame(
         {
             "file": [str(path.relative_to(output)) for path in written],
+            "case_sets": "; ".join(
+                f"{name}: {','.join(metrics)} (distance_restriction={restriction})"
+                for name, metrics, restriction in CASE_SETS
+            ),
+            "metrics_in_means": ",".join(METRICS),
             "git_revision": git_revision(),
         }
     )
