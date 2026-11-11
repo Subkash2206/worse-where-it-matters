@@ -80,6 +80,21 @@ def load_dir(directory: Path) -> pd.DataFrame:
     return pd.concat([read_long_csv(path) for path in paths], ignore_index=True)
 
 
+def _majority_flag(values: pd.Series) -> str:
+    """Most frequent empty-mask state of one unit, with the conservative tie-break.
+
+    A tie (typically an even number of checkpoints) resolves to ``pred_empty`` so that an
+    ambiguous case is treated as a miss and stays out of the distance means instead of
+    making them look better.
+    """
+    counts = values.value_counts()
+    if counts.empty:
+        return "both_nonempty"
+    if counts.size > 1 and counts.iloc[0] == counts.iloc[1]:
+        return "pred_empty"
+    return str(counts.index[0])
+
+
 def unit_averaged(runs: pd.DataFrame, unit: str) -> pd.DataFrame:
     """One row per (unit id, method, metric): the mean over that unit's checkpoints.
 
@@ -99,9 +114,9 @@ def unit_averaged(runs: pd.DataFrame, unit: str) -> pd.DataFrame:
     # distance metrics to cases that both methods predicted something on
     flags = (
         subset.groupby([key, "method"])["empty_flag"]
-        .agg(lambda values: values.value_counts().idxmax())
+        .agg(_majority_flag)
         .reset_index()
-        .rename(columns={key: "case_id", "empty_flag": "empty_flag"})
+        .rename(columns={key: "case_id"})
     )
     averaged = averaged.merge(flags, on=["case_id", "method"], how="left")
     averaged["group_id"] = averaged["case_id"]
@@ -200,6 +215,11 @@ def miss_table(
     return table.sort_values("method").reset_index(drop=True)
 
 
+def _predicted_anything(flag: object) -> bool:
+    """Did a method put foreground anywhere?  ``pred_empty``/``both_empty`` mean it did not."""
+    return flag not in {None, "pred_empty", "both_empty"}
+
+
 def false_positive_table(
     runs: pd.DataFrame, methods: list[str], *, reference: str
 ) -> pd.DataFrame:
@@ -214,27 +234,37 @@ def false_positive_table(
     dice = runs.loc[runs["metric"] == "dice"]
     volume = runs.loc[runs["metric"] == "pred_volume_mm3"]
     flags = (
-        dice.groupby(["case_id", "method"])["empty_flag"]
-        .agg(lambda values: values.value_counts().idxmax())
-        .unstack("method")
+        dice.groupby(["case_id", "method"])["empty_flag"].agg(_majority_flag).unstack("method")
     )
     if reference not in flags.columns:
         return pd.DataFrame()
-    lesion_free = set(flags.index[flags[reference] == "gt_empty"])
+    # A patient is lesion-free when its *reference* is empty, which any method reports as
+    # ``gt_empty`` (prediction on an empty reference) or ``both_empty`` (nothing anywhere).
+    # Reading it from the flags of all methods - not only the reference method - keeps a
+    # lesion-free patient visible even when every method stays silent on it.
+    lesion_free: set[str] = set()
+    for method in flags.columns:
+        column = flags[method]
+        lesion_free |= set(column.index[column.isin(["gt_empty", "both_empty"])])
     et_cases = set(flags.index) - lesion_free
-    reference_fp = {case for case in lesion_free if flags.loc[case, reference] != "pred_empty"}
-    reference_missed = {case for case in et_cases if flags.loc[case, reference] == "pred_empty"}
+    reference_fp = {case for case in lesion_free if _predicted_anything(flags.loc[case, reference])}
+    reference_missed = {
+        case for case in et_cases if not _predicted_anything(flags.loc[case, reference])
+    }
     volumes = volume.groupby(["method", "case_id"])["value"].mean()
     rows = []
     for method in methods:
         if method not in flags.columns:
             continue
         column = flags[method]
-        fp = {case for case in lesion_free if column.get(case) != "pred_empty"}
-        missed = {case for case in et_cases if column.get(case) == "pred_empty"}
+        fp = {case for case in lesion_free if _predicted_anything(column.get(case))}
+        missed = {case for case in et_cases if not _predicted_anything(column.get(case))}
         b_fp, c_fp = len(fp - reference_fp), len(reference_fp - fp)
         b_et, c_et = len(missed - reference_missed), len(reference_missed - missed)
-        fp_volumes = volumes.loc[method].reindex(sorted(fp)).dropna()
+        method_volumes = (
+            volumes.loc[method] if method in volumes.index.get_level_values(0) else pd.Series(dtype=float)
+        )
+        fp_volumes = method_volumes.reindex(sorted(fp)).dropna()
         rows.append(
             {
                 "method": method,
