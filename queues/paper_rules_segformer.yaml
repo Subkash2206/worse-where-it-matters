@@ -43,7 +43,8 @@ steps:
     seeds: [0, 1, 2]
     output_dir: results/detrules
     attempts: 2
-    estimate_hours: 4.0
+    # measured after the first two checkpoints: 33 min (1000 cases) + 13 + 7 per checkpoint
+    estimate_hours: 13.0
 
   # ---------------------------------------------------------------- Part 1c: BraTS (3D)
   - name: part1c_brats_detrules
