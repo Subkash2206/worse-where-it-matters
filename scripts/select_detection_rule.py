@@ -68,26 +68,33 @@ def load_runs(directory: Path) -> pd.DataFrame:
 
 
 def method_summary(runs: pd.DataFrame, methods: list[str]) -> pd.DataFrame:
-    """Dice, per-checkpoint misses and majority-missed cases of every method."""
+    """Dice, per-checkpoint misses and per-case misses of every method.
+
+    A case is scored by three seeds (one fold each), so "majority missed" is defined as
+    missed by at least two of that case's three seeds - the internal counterpart of the
+    external "missed by a majority of the 15 checkpoints".
+    """
     dice = runs.loc[runs["metric"] == "dice"]
     rows = []
     for method in methods:
         block = dice.loc[dice["method"] == method]
         if block.empty:
             continue
-        per_run = block.groupby(["fold", "seed", "case_id"])["value"].mean()
-        misses = block.groupby(["fold", "seed", "case_id"])["missed_detection"].mean()
+        per_case = block.groupby("case_id")["value"].mean()
+        missed_rate = block.groupby("case_id")["missed_detection"].mean()
         rows.append(
             {
                 "method": method,
                 "n_checkpoints": int(block["run_id"].nunique()),
-                "n_cases": int(per_run.size),
-                "dice_mean": float(per_run.mean()),
-                "dice_median": float(per_run.median()),
+                "n_case_evaluations": int(len(block)),
+                "n_cases": int(per_case.size),
+                "seeds_per_case": float(block.groupby("case_id")["run_id"].nunique().mean()),
+                "dice_mean": float(per_case.mean()),
+                "dice_median": float(per_case.median()),
                 "missed_checkpoints": int(block["missed_detection"].sum()),
                 "missed_checkpoint_rate_pct": float(block["missed_detection"].mean() * 100.0),
-                "cases_missed_any": int((misses > 0).sum()),
-                "cases_majority_missed": int((misses >= MAJORITY / 15.0).sum()),
+                "cases_missed_any": int((missed_rate > 0).sum()),
+                "cases_majority_missed": int((missed_rate > 0.5).sum()),
             }
         )
     return pd.DataFrame(rows).sort_values("method").reset_index(drop=True)
@@ -145,6 +152,7 @@ def choose(table: pd.DataFrame, reference: str, candidates: list[str], max_drop:
             "minimise majority-missed cases among the lowdet candidates whose mean Dice is at "
             f"most {max_drop} below plain {reference}; ties break on missed checkpoints"
         ),
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -197,4 +205,3 @@ def main(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     raise SystemExit(main())
 
-    }
