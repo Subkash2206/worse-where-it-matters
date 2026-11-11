@@ -8,10 +8,12 @@ dataset), and every collection is marked as external:
 * bottom: a paired dot plot of the share of cases that a **majority of the 15 checkpoints** miss,
   baseline against TTA-8, for the same tertile and dataset.  The two dots of a pair are joined by a
   short vertical segment and nothing is drawn across tertiles, so a reader never confuses a
-  between-dataset trend with a within-pair change - which is the price paid for the gain.
+  between-dataset trend with a within-pair change - which is the price paid for the gain.  The column
+  of the SwinUNETR carries no markers at all: it misses no polyp by majority in any bin, so the panel
+  states that instead of plotting a row of zeros.
 
-Both panels come straight from ``results/external_by_model`` and update themselves when the SwinUNETR
-runs land.  Colours are the shared Okabe-Ito palette of ``style.py``.
+Both panels come straight from ``results/external_by_model``.  Colours are the shared Okabe-Ito
+palette of ``style.py``.
 """
 
 from __future__ import annotations
@@ -104,7 +106,7 @@ def main() -> int:
                 & (summary["dataset"] == dataset)
                 & (summary["method"] == "tta8")
             ]
-            if not base.empty and not tta.empty:
+            if not base.empty and not tta.empty and family == "unet_resnet50":
                 base = base.set_index("size_bin")["miss_rate"] * 100.0
                 tta = tta.set_index("size_bin")["miss_rate"] * 100.0
                 base_values = np.array([float(base.get(bin_label, np.nan)) for bin_label in BINS])
@@ -166,7 +168,8 @@ def main() -> int:
                 color="#606060",
             )
     fig.suptitle(
-        "TTA-8 gains Dice in most size bins but adds missed polyps in every bin on ColonDB and ETIS",
+        "UNet: TTA-8 gains Dice in most size bins but adds missed polyps in every bin on ColonDB and "
+        "ETIS",
         y=1.03,
         fontsize=8.5,
     )

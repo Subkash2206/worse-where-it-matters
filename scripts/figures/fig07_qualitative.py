@@ -487,7 +487,7 @@ def _draw(rows: list[dict]) -> int:
             f"{int(row[row['method']].sum())} px)"
         )
 
-    columns = ("image", "baseline", "TTA", f"zoom ({ZOOM_FACTOR:.0f}x)")
+    columns = ("image", "baseline", "TTA", "zoom")
     fig, axes = plt.subplots(
         len(rows), len(columns), figsize=(7.0, 1.28 * len(rows)), squeeze=False
     )

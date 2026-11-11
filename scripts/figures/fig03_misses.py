@@ -7,7 +7,9 @@ Two panels, because the two families define a miss differently and the numbers m
   case), with the Holm-adjusted McNemar p of the paired transition;
 * (b) external polyp collections: the share of cases that a **majority of the 15 checkpoints** miss,
   with a Jeffreys interval and the McNemar p of the case-majority transition - the definition the
-  external validation reports, and the conservative companion of the per-checkpoint count.
+  external validation reports, and the conservative companion of the per-checkpoint count.  This panel
+  shows the UNet only: the SwinUNETR never missed a polyp by majority on any external collection, so
+  its bars would be a row of zeros (the caption says so).
 
 The methods are encoded as grey shades (one legend for the two panels); the p-value of every paired
 comparison sits horizontally above its pair of bars, and the panel keeps enough headroom that neither
@@ -33,12 +35,9 @@ INTERNAL = (
 EXTERNAL = style.RESULTS / "external_by_model" / "misses.csv"
 METHODS = ("baseline", "tta4", "tta8")
 INTERNAL_ORDER = ("cvc_unet", "cvc_swin", "brats")
-#: (collection, family) pairs of the external panel, UNet then SwinUNETR for each collection
-EXTERNAL_ORDER = tuple(
-    f"{dataset}::{family}"
-    for dataset in ("kvasir_seg", "cvc_colondb", "etis_larib")
-    for family in ("unet_resnet50", "swinunetr_2d")
-)
+#: panel (b) shows the UNet; the SwinUNETR has no majority-missed polyp at all (printed as a note)
+EXTERNAL_FAMILY = "unet_resnet50"
+EXTERNAL_ORDER = ("kvasir_seg", "cvc_colondb", "etis_larib")
 #: grey shades, light to dark per method (the legend is shared by both panels)
 GREY = {"baseline": "#333333", "tta4": "#8a8a8a", "tta8": "#c6c6c6"}
 #: the method names as every other figure writes them
@@ -48,12 +47,15 @@ SHORT_LABELS = {
     "cvc_unet": "CVC-ClinicDB\nUNet",
     "cvc_swin": "CVC-ClinicDB\nSwinUNETR",
     "brats": "BraTS 2021\nSegResNet",
-    "kvasir_seg::unet_resnet50": "Kvasir-SEG\nUNet",
+    "kvasir_seg::unet_resnet50": "Kvasir-SEG\nexternal",
     "kvasir_seg::swinunetr_2d": "Kvasir-SEG\nSwinUNETR",
-    "cvc_colondb::unet_resnet50": "CVC-ColonDB\nUNet",
+    "cvc_colondb::unet_resnet50": "CVC-ColonDB\nexternal",
     "cvc_colondb::swinunetr_2d": "CVC-ColonDB\nSwinUNETR",
-    "etis_larib::unet_resnet50": "ETIS-Larib\nUNet",
+    "etis_larib::unet_resnet50": "ETIS-Larib\nexternal",
     "etis_larib::swinunetr_2d": "ETIS-Larib\nSwinUNETR",
+    "kvasir_seg": "Kvasir-SEG\nexternal",
+    "cvc_colondb": "CVC-ColonDB\nexternal",
+    "etis_larib": "ETIS-Larib\nexternal",
 }
 
 
@@ -92,7 +94,9 @@ def collect() -> pd.DataFrame:
     if EXTERNAL.is_file():
         table = pd.read_csv(EXTERNAL)
         for (dataset, family), block in table.groupby(["dataset", "family"]):
-            key = f"{dataset}::{family}"
+            if family != EXTERNAL_FAMILY:
+                continue  # the SwinUNETR never misses a polyp by majority (see the printed note)
+            key = str(dataset)
             for method in METHODS:
                 row = block.loc[block["method"] == method]
                 if row.empty:
@@ -184,7 +188,9 @@ def _panel(
             text = _p_text(float(block[method]["p_value"]))
             if not text:
                 continue
-            height = max(base_top, tops[method], previous + pad)
+            # always at least one pad above every cap of the pair (and above the previous level)
+            target = max(base_top, tops[method])
+            height = max(target, previous) + pad
             previous = height
             left = index - width
             right = index + (METHODS.index(method) - 1) * width
@@ -193,7 +199,7 @@ def _panel(
                 text,
                 ((left + right) / 2.0, height),
                 textcoords="offset points",
-                xytext=(0, 1.5),
+                xytext=(0, 2.0),
                 ha="center",
                 va="bottom",
                 fontsize=5.4,
@@ -235,8 +241,19 @@ def main() -> int:
         EXTERNAL_ORDER,
         "(b) external: missed by >= 8 of 15 checkpoints",
         "majority-miss rate [%]",
-        rotate=25,
     )
+    if EXTERNAL.is_file():
+        swin = pd.read_csv(EXTERNAL)
+        swin = swin.loc[swin["family"] == "swinunetr_2d"]
+        if not swin.empty:
+            per_dataset = ", ".join(
+                f"{row['dataset']} {int(row['cases_majority_missed'])}/{int(row['n_cases'])}"
+                for _, row in swin.loc[swin["method"] == "tta8"].iterrows()
+            )
+            print(
+                "caption note: panel (b) shows the UNet; the SwinUNETR has no majority-missed polyp "
+                f"on any external collection (TTA-8: {per_dataset})"
+            )
     handles = [
         Patch(facecolor=GREY[method], edgecolor="white", label=METHOD_TEXT[method])
         for method in METHODS

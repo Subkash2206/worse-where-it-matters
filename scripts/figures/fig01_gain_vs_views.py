@@ -4,7 +4,9 @@ Two panels share the x axis (views on a log-2 scale): the absolute Dice change a
 HD95 change against the single-view baseline, one line per setting, with the 95 % bootstrap CI of
 the paired per-case delta as error bars.  Everything is read from the paired tables the aggregation
 already wrote (``paired_seed_averaged.csv`` internally, ``external_by_model/paired.csv`` externally),
-so the figure never recomputes a statistic the tables do not contain.
+so the figure never recomputes a statistic the tables do not contain.  Colour encodes the dataset and
+the line style the architecture - solid + filled for the UNet, dashed + open for the SwinUNETR - for
+every pair, the two internal CVC-ClinicDB grids included; the legend names are ``<dataset> · <model>``.
 """
 
 from __future__ import annotations
@@ -37,25 +39,41 @@ _LEGEND_ORDER = {
 }
 #: external collections: their UNet and SwinUNETR runs share a colour and differ by line style
 EXTERNAL_KEYS = ("kvasir_seg", "cvc_colondb", "etis_larib")
+#: short collection names for the "<dataset> · <model>" legend entries
+SHORT_NAMES = {
+    "cvc_unet": "CVC-ClinicDB",
+    "cvc_swin": "CVC-ClinicDB",
+    "brats": "BraTS 2021",
+    "kvasir_seg": "Kvasir-SEG",
+    "cvc_colondb": "CVC-ColonDB",
+    "etis_larib": "ETIS-Larib",
+}
 
 
 def _setting_style(setting: str) -> tuple[str, str, str, str, tuple[int, int]]:
     """Colour, marker, linestyle, label and legend sort key of one series.
 
-    ``<dataset>_swin`` is the SwinUNETR run of an external collection: same colour and marker as
-    the UNet run, but a dashed line and an open marker so both architectures stay visible.
+    Colour encodes the dataset and the line style the architecture: every pair - including the two
+    internal CVC-ClinicDB grids - is solid + filled for the UNet and dashed + open for the SwinUNETR.
     """
     swin = setting.endswith("_swin") and setting[: -len("_swin")] in EXTERNAL_KEYS
     base = setting[: -len("_swin")] if swin else setting
-    colour = style.PALETTE.get(base, "#555555")
-    marker = style.MARKERS.get(base, "o")
-    label = style.LABELS.get(base, base)
-    order = (_LEGEND_ORDER.get(label, 99), 1 if swin else 0)
-    if swin:
-        return colour, marker, "--", label + " \u00b7 SwinUNETR", order
-    if base in EXTERNAL_KEYS:
-        return colour, marker, "-", label + " \u00b7 UNet", order
-    return colour, marker, "-", label, order
+    internal_pair = base in ("cvc_unet", "cvc_swin")
+    colour_key = "cvc_unet" if internal_pair else base
+    colour = style.PALETTE.get(colour_key, "#555555")
+    marker = style.MARKERS.get(colour_key, "o")
+    label = SHORT_NAMES.get(base, base)
+    if base == "cvc_swin" or swin:
+        model = "SwinUNETR"
+    elif base == "brats":
+        model = "SegResNet"
+    else:
+        model = "UNet"
+    order = (
+        _LEGEND_ORDER.get(style.LABELS.get(base, base), 99),
+        1 if swin or base == "cvc_swin" else 0,
+    )
+    return colour, marker, "--" if model == "SwinUNETR" else "-", f"{label} · {model}", order
 
 
 
@@ -133,7 +151,7 @@ def main() -> int:
                 marker=marker,
                 color=colour,
                 linestyle=linestyle,
-                markerfacecolor="white" if str(setting).endswith("_swin") else colour,
+                markerfacecolor="white" if linestyle == "--" else colour,
                 label=series_label,
                 linewidth=1.2,
                 elinewidth=0.7,
