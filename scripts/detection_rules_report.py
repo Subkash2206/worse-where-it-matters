@@ -95,6 +95,15 @@ def unit_averaged(runs: pd.DataFrame, unit: str) -> pd.DataFrame:
         .mean()
         .rename(columns={key: "case_id"})
     )
+    # the majority empty-mask state, which the paired analysis uses to restrict the
+    # distance metrics to cases that both methods predicted something on
+    flags = (
+        subset.groupby([key, "method"])["empty_flag"]
+        .agg(lambda values: values.value_counts().idxmax())
+        .reset_index()
+        .rename(columns={key: "case_id", "empty_flag": "empty_flag"})
+    )
+    averaged = averaged.merge(flags, on=["case_id", "method"], how="left")
     averaged["group_id"] = averaged["case_id"]
     averaged["split"] = "test"
     averaged["fold"] = 0
@@ -267,8 +276,8 @@ def _print_pairs(table: pd.DataFrame, title: str) -> None:
             "treatment",
             "metric",
             "n_pairs",
-            "control_mean",
-            "treatment_mean",
+            "mean_control",
+            "mean_treatment",
             "delta_mean",
             "ci_low",
             "ci_high",
