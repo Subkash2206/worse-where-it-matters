@@ -33,7 +33,12 @@ INTERNAL = (
 EXTERNAL = style.RESULTS / "external_by_model" / "misses.csv"
 METHODS = ("baseline", "tta4", "tta8")
 INTERNAL_ORDER = ("cvc_unet", "cvc_swin", "brats")
-EXTERNAL_ORDER = ("kvasir_seg", "cvc_colondb", "etis_larib")
+#: (collection, family) pairs of the external panel, UNet then SwinUNETR for each collection
+EXTERNAL_ORDER = tuple(
+    f"{dataset}::{family}"
+    for dataset in ("kvasir_seg", "cvc_colondb", "etis_larib")
+    for family in ("unet_resnet50", "swinunetr_2d")
+)
 #: grey shades, light to dark per method (the legend is shared by both panels)
 GREY = {"baseline": "#333333", "tta4": "#8a8a8a", "tta8": "#c6c6c6"}
 #: the method names as every other figure writes them
@@ -43,9 +48,12 @@ SHORT_LABELS = {
     "cvc_unet": "CVC-ClinicDB\nUNet",
     "cvc_swin": "CVC-ClinicDB\nSwinUNETR",
     "brats": "BraTS 2021\nSegResNet",
-    "kvasir_seg": "Kvasir-SEG\nexternal",
-    "cvc_colondb": "CVC-ColonDB\nexternal",
-    "etis_larib": "ETIS-Larib\nexternal",
+    "kvasir_seg::unet_resnet50": "Kvasir-SEG\nUNet",
+    "kvasir_seg::swinunetr_2d": "Kvasir-SEG\nSwinUNETR",
+    "cvc_colondb::unet_resnet50": "CVC-ColonDB\nUNet",
+    "cvc_colondb::swinunetr_2d": "CVC-ColonDB\nSwinUNETR",
+    "etis_larib::unet_resnet50": "ETIS-Larib\nUNet",
+    "etis_larib::swinunetr_2d": "ETIS-Larib\nSwinUNETR",
 }
 
 
@@ -84,8 +92,7 @@ def collect() -> pd.DataFrame:
     if EXTERNAL.is_file():
         table = pd.read_csv(EXTERNAL)
         for (dataset, family), block in table.groupby(["dataset", "family"]):
-            if family != "unet_resnet50":
-                continue  # the SwinUNETR runs land later; the figure picks them up then
+            key = f"{dataset}::{family}"
             for method in METHODS:
                 row = block.loc[block["method"] == method]
                 if row.empty:
@@ -96,7 +103,7 @@ def collect() -> pd.DataFrame:
                 low, high = jeffreys(missed, total)
                 rows.append(
                     {
-                        "dataset": dataset,
+                        "dataset": key,
                         "method": method,
                         "rate": missed / total,
                         "low": low,
@@ -120,7 +127,9 @@ def _p_text(p_value: float) -> str:
     return f"p={p_value:.3f}"
 
 
-def _panel(ax, table: pd.DataFrame, order: tuple[str, ...], title: str, ylabel: str) -> None:
+def _panel(
+    ax, table: pd.DataFrame, order: tuple[str, ...], title: str, ylabel: str, *, rotate: float = 0.0
+) -> None:
     """Grouped bars for the datasets of one panel, p-values horizontally above each pair."""
     datasets = [name for name in order if name in set(table["dataset"])]
     width = 0.24
@@ -191,7 +200,12 @@ def _panel(ax, table: pd.DataFrame, order: tuple[str, ...], title: str, ylabel: 
                 color="#303030",
             )
     ax.set_xticks(range(len(datasets)))
-    ax.set_xticklabels([SHORT_LABELS.get(name, name) for name in datasets])
+    ax.set_xticklabels(
+        [SHORT_LABELS.get(name, name) for name in datasets],
+        rotation=rotate,
+        ha="right" if rotate else "center",
+        fontsize=6.5 if rotate else 7.0,
+    )
     ax.set_ylabel(ylabel)
     ax.set_title(title, loc="left")
     ax.set_xlim(-0.6, len(datasets) - 0.4)
@@ -221,6 +235,7 @@ def main() -> int:
         EXTERNAL_ORDER,
         "(b) external: missed by >= 8 of 15 checkpoints",
         "majority-miss rate [%]",
+        rotate=25,
     )
     handles = [
         Patch(facecolor=GREY[method], edgecolor="white", label=METHOD_TEXT[method])

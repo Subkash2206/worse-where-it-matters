@@ -35,15 +35,41 @@ _LEGEND_ORDER = {
         for key in ("cvc_unet", "cvc_swin", "brats", "kvasir_seg", "cvc_colondb", "etis_larib")
     )
 }
+#: external collections: their UNet and SwinUNETR runs share a colour and differ by line style
+EXTERNAL_KEYS = ("kvasir_seg", "cvc_colondb", "etis_larib")
+
+
+def _setting_style(setting: str) -> tuple[str, str, str, str, tuple[int, int]]:
+    """Colour, marker, linestyle, label and legend sort key of one series.
+
+    ``<dataset>_swin`` is the SwinUNETR run of an external collection: same colour and marker as
+    the UNet run, but a dashed line and an open marker so both architectures stay visible.
+    """
+    swin = setting.endswith("_swin") and setting[: -len("_swin")] in EXTERNAL_KEYS
+    base = setting[: -len("_swin")] if swin else setting
+    colour = style.PALETTE.get(base, "#555555")
+    marker = style.MARKERS.get(base, "o")
+    label = style.LABELS.get(base, base)
+    order = (_LEGEND_ORDER.get(label, 99), 1 if swin else 0)
+    if swin:
+        return colour, marker, "--", label + " \u00b7 SwinUNETR", order
+    if base in EXTERNAL_KEYS:
+        return colour, marker, "-", label + " \u00b7 UNet", order
+    return colour, marker, "-", label, order
 
 
 
-def _rows(frame: pd.DataFrame, key: str) -> list[dict]:
-    """One entry per (views, metric) with the delta, its CI and the relative CI."""
+def _rows(frame: pd.DataFrame, key: str, family: str = "unet_resnet50") -> list[dict]:
+    """One entry per (views, metric) with the delta, its CI and the relative CI.
+
+    ``key`` is the dataset and ``family`` the external architecture; a SwinUNETR run is stored
+    under ``<dataset>_swin`` so the two architectures never share a line.
+    """
     rows: list[dict] = []
     control = "mean_control" if "mean_control" in frame.columns else "control_mean"
     if "treatment" not in frame.columns and "comparison" in frame.columns:
         frame = frame.assign(treatment=frame["comparison"].str.split().str[0])
+    setting = key if family == "unet_resnet50" else f"{key}_swin"
     for metric in ("dice", "hd95"):
         block = frame.loc[frame["metric"] == metric]
         if block.empty:
@@ -57,7 +83,7 @@ def _rows(frame: pd.DataFrame, key: str) -> list[dict]:
             scale = 100.0 / base if metric == "hd95" and base else 1.0
             rows.append(
                 {
-                    "setting": key,
+                    "setting": setting,
                     "metric": metric,
                     "views": views,
                     "delta": float(row["delta_mean"]) * scale,
@@ -75,9 +101,8 @@ def collect() -> pd.DataFrame:
             rows.extend(_rows(pd.read_csv(path), key))
     if EXTERNAL.is_file():
         external = pd.read_csv(EXTERNAL)
-        external = external.rename(columns={"family": "ignored"})
-        for key, block in external.groupby("dataset"):
-            rows.extend(_rows(block, key))
+        for (key, family), block in external.groupby(["dataset", "family"]):
+            rows.extend(_rows(block, str(key), str(family)))
     # the single-view reference is zero by construction
     frame = pd.DataFrame(rows)
     reference = frame.loc[:, ["setting", "metric"]].drop_duplicates()
@@ -99,20 +124,23 @@ def main() -> int:
         block = table.loc[table["metric"] == metric]
         for setting, group in block.groupby("setting"):
             group = group.sort_values("views")
-            offset = X_OFFSET.get(setting, 1.0)
+            offset = X_OFFSET.get(str(setting), 1.0)
+            colour, marker, linestyle, series_label, order = _setting_style(str(setting))
             line = ax.errorbar(
                 group["views"] * offset,
                 group["delta"],
                 yerr=[group["delta"] - group["low"], group["high"] - group["delta"]],
-                marker=style.MARKERS.get(setting, "o"),
-                color=style.PALETTE.get(setting, "#555555"),
-                label=style.LABELS.get(setting, setting),
+                marker=marker,
+                color=colour,
+                linestyle=linestyle,
+                markerfacecolor="white" if str(setting).endswith("_swin") else colour,
+                label=series_label,
                 linewidth=1.2,
                 elinewidth=0.7,
                 capsize=2,
             )
             if metric == "dice":
-                handles.append(line)
+                handles.append((order, line))
         ax.axhline(0.0, color="#909090", linewidth=0.7)
         ax.set_xscale("log", base=2)
         ax.set_xticks([1, 2, 4, 8])
@@ -131,7 +159,7 @@ def main() -> int:
         color="#707070",
     )
     # one legend for both panels, outside the axes so it cannot cover a curve
-    handles = sorted(handles, key=lambda handle: _LEGEND_ORDER.get(handle.get_label(), 99))
+    handles = [line for _, line in sorted(handles, key=lambda item: item[0])]
     fig.legend(
         handles=handles,
         labels=[handle.get_label() for handle in handles],

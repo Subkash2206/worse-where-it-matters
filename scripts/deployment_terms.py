@@ -48,7 +48,7 @@ def _read(path: Path) -> pd.DataFrame:
     return pd.read_csv(path) if path.is_file() else pd.DataFrame()
 
 
-def _tail_rows(directory: Path, key: str, kind: str) -> list[dict[str, Any]]:
+def _tail_rows(directory: Path, key: str, kind: str, model: str) -> list[dict[str, Any]]:
     """Large-boundary failures fixed, misses added and the lesion-free false positives.
 
     The baseline row is the reference of the table: zero extra passes, no transition, no failure
@@ -92,6 +92,7 @@ def _tail_rows(directory: Path, key: str, kind: str) -> list[dict[str, Any]]:
         rows.append(
             {
                 "dataset": key,
+                "model": model,
                 "unit": "patients" if kind == "3d" else "frames",
                 "method": method,
                 "boundary_failures_fixed_per_1000": fixed,
@@ -143,6 +144,7 @@ def _external_rows() -> list[dict[str, Any]]:
             rows.append(
                 {
                     "dataset": dataset,
+                    "model": family,
                     "unit": "frames",
                     "method": method,
                     "boundary_failures_fixed_per_1000": fixed,
@@ -189,13 +191,13 @@ def _latency_cell(row: pd.Series) -> str:
 
 def main() -> int:
     rows: list[dict[str, Any]] = []
-    for key, directory, kind in (
-        ("cvc_unet", RESULTS / "aggregate_cvc_clinicdb_unet_resnet50", "2d"),
-        ("cvc_swin", RESULTS / "aggregate_cvc_clinicdb_swinunetr_2d", "2d"),
-        ("brats", RESULTS / "aggregate_brats2021_segresnet_reduced", "3d"),
+    for key, directory, kind, model in (
+        ("cvc_unet", RESULTS / "aggregate_cvc_clinicdb_unet_resnet50", "2d", "unet_resnet50"),
+        ("cvc_swin", RESULTS / "aggregate_cvc_clinicdb_swinunetr_2d", "2d", "swinunetr_2d"),
+        ("brats", RESULTS / "aggregate_brats2021_segresnet_reduced", "3d", "segresnet"),
     ):
         if directory.is_dir():
-            rows.extend(_tail_rows(directory, key, kind))
+            rows.extend(_tail_rows(directory, key, kind, model))
     rows.extend(_external_rows())
     table = pd.DataFrame(rows)
     if table.empty:
@@ -214,15 +216,15 @@ def main() -> int:
     )
     lines.extend(
         [
-            "| dataset | unit | method | passes | boundary failures fixed | misses added | "
+            "| dataset | model | unit | method | passes | boundary failures fixed | misses added | "
             "false positives on lesion-free | false positives removed | latency (absolute) | "
             "latency estimated |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     )
-    for _, row in table.sort_values(["dataset", "method"]).iterrows():
+    for _, row in table.sort_values(["dataset", "model", "method"]).iterrows():
         lines.append(
-            f"| {row['dataset']} | {row['unit']} | {row['method']} | "
+            f"| {row['dataset']} | {row['model']} | {row['unit']} | {row['method']} | "
             f"{int(row['forward_passes'])} | "
             f"{_number(row['boundary_failures_fixed_per_1000'])} | "
             f"{_number(row['misses_added_per_1000'])} | "
@@ -258,9 +260,10 @@ def main() -> int:
             f"BraTS false positives on the {sorted(totals)[0] if totals else '?'} lesion-free "
             f"patients: {counts}"
         )
-    for _, row in table.sort_values(["dataset", "method"]).iterrows():
+    for _, row in table.sort_values(["dataset", "model", "method"]).iterrows():
         print(
-            f"  {row['dataset']:12s} {row['method']:8s} {int(row['forward_passes'])} pass(es) "
+            f"  {row['dataset']:12s} {row['model']:14s} {row['method']:8s} "
+            f"{int(row['forward_passes'])} pass(es) "
             f"latency {_latency_cell(row):18s} "
             f"FP on lesion-free {_fp_cell(row) or '-':8s} removed "
             f"{_number(row['false_positives_removed'], decimals=0) or '-'}"

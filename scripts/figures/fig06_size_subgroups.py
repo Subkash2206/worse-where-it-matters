@@ -47,25 +47,36 @@ def main() -> int:
     import matplotlib.pyplot as plt
     import numpy as np
 
-    families = sorted(delta["family"].unique())
-    datasets = [name for name in delta["dataset"].unique()]
-    fig, (top, bottom) = plt.subplots(
-        2, 1, figsize=(7.0, 3.8), sharex=True, gridspec_kw={"height_ratios": [1.15, 1.0]}
+    families = [
+        family for family in ("unet_resnet50", "swinunetr_2d") if family in set(delta["family"])
+    ]
+    datasets = [
+        name for name in ("kvasir_seg", "cvc_colondb", "etis_larib") if name in set(delta["dataset"])
+    ]
+    family_label = {"unet_resnet50": "UNet", "swinunetr_2d": "SwinUNETR"}
+    # one column per architecture: three series per bin instead of six in the same axis
+    fig, axes = plt.subplots(
+        2,
+        len(families),
+        figsize=(3.6 * len(families), 3.9),
+        sharex=True,
+        sharey="row",
+        squeeze=False,
+        gridspec_kw={"height_ratios": [1.15, 1.0]},
     )
     positions = np.arange(len(BINS))
-    width = 0.8 / max(len(families) * len(datasets), 1)
-    offset = -0.4 + width / 2
-    for family in families:
+    width = 0.8 / max(len(datasets), 1)
+    for column, family in enumerate(families):
+        top, bottom = axes[0][column], axes[1][column]
+        offset = -0.4 + width / 2
         for dataset in datasets:
             block = delta.loc[(delta["family"] == family) & (delta["dataset"] == dataset)]
             if block.empty:
+                offset += width
                 continue
-            key = dataset if family == "unet_resnet50" else "cvc_swin"
-            colour = style.PALETTE.get(key, "#555555")
+            colour = style.PALETTE.get(dataset, "#555555")
             marker = style.MARKERS.get(dataset, "o")
             label = style.LABELS.get(dataset, dataset)
-            if family != "unet_resnet50":
-                colour, marker, label = style.PALETTE["cvc_swin"], "X", label + ", Swin"
             values, lows, highs = [], [], []
             for bin_label in BINS:
                 row = block.loc[block["size_bin"] == bin_label]
@@ -134,19 +145,32 @@ def main() -> int:
                     zorder=4,
                 )
             offset += width
-    top.axhline(0.0, color="#909090", linewidth=0.7)
-    top.set_ylabel("TTA-8 Dice gain")
-    top.set_title(
-        "TTA-8 gains Dice in most size bins but adds missed polyps in every bin on ColonDB and ETIS"
+        top.axhline(0.0, color="#909090", linewidth=0.7)
+        top.set_ylabel("TTA-8 Dice gain" if column == 0 else "")
+        top.set_title(f"({'ab'[column]}) {family_label[family]}", loc="left")
+        top.set_ylim(bottom=min(-0.005, float(top.get_ylim()[0])))
+        bottom.set_ylabel("missed by most checkpoints (%)" if column == 0 else "")
+        bottom.set_xlabel("reference polyp-area tertile (cut per dataset)")
+        bottom.set_xticks(positions)
+        bottom.set_xticklabels([f"{label}" for label in BINS])
+        bottom.set_ylim(-0.9, float(bottom.get_ylim()[1]) * 1.06)
+        block_all = summary.loc[summary["family"] == family]
+        if not block_all.empty and float(block_all["miss_rate"].max()) == 0.0:
+            bottom.annotate(
+                "no majority miss in any bin",
+                (0.5, 0.5),
+                xycoords="axes fraction",
+                ha="center",
+                va="center",
+                fontsize=6.5,
+                color="#606060",
+            )
+    fig.suptitle(
+        "TTA-8 gains Dice in most size bins but adds missed polyps in every bin on ColonDB and ETIS",
+        y=1.03,
+        fontsize=8.5,
     )
-    top.set_ylim(bottom=min(-0.005, float(top.get_ylim()[0])))
-    top.set_ylim(top=float(top.get_ylim()[1]) * 1.02)
-    bottom.set_ylabel("missed by most checkpoints (%)")
-    bottom.set_xlabel("reference polyp-area tertile (cut per dataset)")
-    bottom.set_xticks(positions)
-    bottom.set_xticklabels([f"{label}" for label in BINS])
-    bottom.set_ylim(-0.9, float(bottom.get_ylim()[1]) * 1.06)
-    handles, labels = top.get_legend_handles_labels()
+    handles, labels = axes[0][0].get_legend_handles_labels()
     extra = [
         plt.Line2D([], [], linestyle="none", marker="o", markersize=4.4, markerfacecolor="white",
                    markeredgecolor="#404040", markeredgewidth=0.9, label="baseline (open)"),
@@ -158,20 +182,12 @@ def main() -> int:
         labels=labels + [item.get_label() for item in extra],
         loc="upper center",
         ncol=2,
-        bbox_to_anchor=(0.5, -0.03),
+        bbox_to_anchor=(0.5, 0.0),
         fontsize=6.5,
         columnspacing=1.6,
         handletextpad=0.5,
     )
-    fig.text(
-        0.5,
-        -0.155,
-        "marker shape = dataset",
-        ha="center",
-        va="top",
-        fontsize=5.5,
-        color="#606060",
-    )
+    fig.text(0.5, -0.16, "marker shape = dataset", ha="center", va="top", fontsize=5.5, color="#606060")
     style.save(fig, "fig06_size_subgroups")
     return 0
 

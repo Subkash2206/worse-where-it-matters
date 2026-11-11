@@ -41,6 +41,20 @@ def test_read_pid_file_tolerates_missing_and_broken_files(tmp_path) -> None:
     assert read_pid_file(good) == 4242
 
 
+def test_read_pid_file_accepts_a_bom_and_a_pid_prefix(tmp_path) -> None:
+    """Regression: two launch helpers wrote '\\ufeffpid 23124', which parsed as 0 (no guard)."""
+    prefixed = tmp_path / "prefixed.pid"
+    prefixed.write_text("\ufeffpid 23124", encoding="utf-8")
+    assert read_pid_file(prefixed) == 23124
+    bare_bom = tmp_path / "bom.pid"
+    bare_bom.write_text("\ufeff31415", encoding="utf-8")
+    assert read_pid_file(bare_bom) == 31415
+    trailing = tmp_path / "trailing.pid"
+    trailing.write_text("pid 2718 (external_swin)\n", encoding="utf-8")
+    assert read_pid_file(trailing) == 2718
+    assert read_pid_file(tmp_path / "zero.pid") == 0  # missing file stays 0
+
+
 def test_pid_probe_accepts_the_current_process_only() -> None:
     me = os.getpid()
     assert pid_alive(me)

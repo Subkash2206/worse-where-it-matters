@@ -8,6 +8,7 @@ what a status probe must avoid, so the pid-file logic lives in this top-level mo
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -27,6 +28,9 @@ LAUNCHER_PROCESS_NAMES: tuple[str, ...] = (
     "powershell",
     "pwsh",
 )
+
+#: pid files are written by several tools: bare ("4242"), "pid 4242" and with a UTF-8 BOM
+_PID_PATTERN = re.compile(r"\d+")
 
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
@@ -100,8 +104,19 @@ def pid_alive(pid: int, *, names: Sequence[str] | None = None) -> bool:
 
 
 def read_pid_file(path: str | Path) -> int:
-    """The pid stored in ``path`` (``0`` when it is missing or not an integer)."""
+    """The pid stored in ``path`` (``0`` when it is missing or holds no pid).
+
+    The files are not written by one tool: some hold a bare number, some ``pid 4242``, and some
+    carry a UTF-8 BOM (a sidestepping ``open(..., "w", encoding="utf-8-sig")`` anywhere upstream).
+    ``utf-8-sig`` strips the BOM and the first integer in the file is the pid, so all three forms
+    work - a pid file that parses to 0 would otherwise disable a queue's wait guard silently.
+    """
     try:
-        return int(Path(path).read_text(encoding="utf-8").strip() or 0)
-    except (OSError, ValueError):
+        text = Path(path).read_text(encoding="utf-8-sig")
+    except OSError:
         return 0
+    match = _PID_PATTERN.search(text)
+    if match is None:
+        return 0
+    value = int(match.group(0))
+    return value if value > 0 else 0
