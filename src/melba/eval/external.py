@@ -193,8 +193,16 @@ def external_tables(
     correction: str = "holm",
     primary_test: str = "wilcoxon",
     alternative: str = "two-sided",
+    paired_metrics: Sequence[str] | None = None,
 ) -> dict[str, pd.DataFrame]:
-    """All external tables: per-model spread plus case-averaged paired/detection results."""
+    """All external tables: per-model spread plus case-averaged paired/detection results.
+
+    ``paired_metrics`` narrows (or disables, with ``()``) the paired TTA block.  It exists
+    for a reference-free cohort (HyperKvasir cecum), whose metrics describe the prediction
+    only: the false-positive table is then the result of interest and a paired test on
+    ``pred_area_px`` must not be dressed up as a quality comparison.  The challenge-scoring
+    table needs Dice and is skipped when it was not computed.
+    """
     methods = sorted(
         {
             str(method)
@@ -211,12 +219,13 @@ def external_tables(
             frames_by_model, metrics=metrics, methods=methods
         ),
     }
-    if present:
+    pair_metrics = list(metrics) if paired_metrics is None else list(paired_metrics)
+    if present and pair_metrics:
         tables["external_paired"] = _paired_block(
             averaged,
             treatments=present,
             control=control,
-            metrics=metrics,
+            metrics=pair_metrics,
             unit=unit,
             n_bootstrap=n_bootstrap,
             ci=ci,
@@ -243,9 +252,10 @@ def external_tables(
         seed=seed,
         correction=correction,
     )
-    tables["external_challenge_scoring"] = challenge_scoring_table(
-        averaged, n_bootstrap=n_bootstrap, ci=ci, seed=seed
-    )
+    if "dice" in set(metrics):
+        tables["external_challenge_scoring"] = challenge_scoring_table(
+            averaged, n_bootstrap=n_bootstrap, ci=ci, seed=seed
+        )
     for name, table in tables.items():
         if table is not None and not table.empty and "scope" not in table.columns:
             table.insert(0, "scope", EXTERNAL_SCOPE)

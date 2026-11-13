@@ -502,6 +502,56 @@ one. The subgroup analysis bins cases by tertiles of the reference lesion area (
 every table), and tests whether the TTA gain differs across bins (Kruskal-Wallis on the
 per-case deltas plus a bootstrap CI of `large - small`).
 
+### Polyp-free cohort: the false-alarm cost (HyperKvasir cecum)
+
+The 1009 frames of HyperKvasir's `cecum` class show a normal caecum, contain **no polyp** and
+ship **no masks**, so every prediction on them is a false positive. That dataset is declared
+with `references: empty` (`configs/external/hyperkvasir_cecum.yaml`): the loader builds the
+all-zero reference at each frame's own resolution in memory (nothing is written into the
+dataset directory, no mask file is invented on disk), the frame is preprocessed exactly like
+the other external sets (352x352, ImageNet normalisation), and the per-case CSV reports
+`empty_flag` as `gt_empty`/`both_empty`.
+
+Dice and HD95 are **not** computed there - without a lesion they are undefined, not zero.
+The config asks for three reference-free descriptors instead, which every run writes per
+case and per method:
+
+| metric | meaning |
+| --- | --- |
+| `pred_empty` | 1 when the method's mask is empty, 0 when it reports a polyp |
+| `pred_area_px` | area of the reported polyp in native pixels |
+| `max_prob` | peak of the aggregated probability map (how close it came to 0.5) |
+
+```bash
+python scripts/validate_external.py --config configs/external/hyperkvasir_cecum.yaml
+python scripts/evaluate_external.py --config configs/external/hyperkvasir_cecum.yaml \
+    --models cvc_clinicdb/unet_resnet50_detrules cvc_clinicdb/segformer_mit_b2_detrules \
+    --datasets hyperkvasir_cecum --folds 0 1 2 3 4 --seeds 0 1 2
+python scripts/false_alarm_report.py \
+    --run unet=results/false_alarm/unet --run segformer=results/false_alarm/segformer \
+    --output-dir results/false_alarm/tables      # CPU only
+```
+
+`false_alarm_report.py` turns the per-case rows into the table the study needs, per method:
+the **false-alarm rate** (% of frames with a non-empty prediction) as both the mean over the
+checkpoints and the **majority over checkpoints** (>= 8 of 15), the **median false area**, and
+the **exact McNemar** test against `baseline` and against plain `tta8` (unit = frame, with the
+pooled checkpoint x frame pairs as a secondary unit).
+
+### Detection-safe rules on SegFormer
+
+`configs/cvc_clinicdb/segformer_mit_b2_detrules.yaml` is `unet_resnet50_detrules.yaml` with
+nothing changed but the architecture and the checkpoint directory: the same 12 methods
+(`baseline`, `tta2/4/8`, `tta4/8_anyview`, `tta4/8_lowdet_20/30/40`), reusing the 15 existing
+SegFormer checkpoints (nothing is retrained; the derived rules add no forward passes). The
+`lowdet` threshold is **not** re-tuned: `t = 0.20` (`lowdet_20`) is the primary rule because
+that is what `scripts/select_detection_rule.py` chose on the internal UNet data, and the other
+two thresholds are sensitivity analyses. `queues/hyperkvasir_segformer_rules.yaml` runs the
+whole Part-2 study as one sequential queue (polyp-free UNet, polyp-free SegFormer, internal
+SegFormer, external ColonDB + ETIS SegFormer, then the two reports), guarded by
+`wait_for_pid_file` with `max_wait_hours: null`, i.e. **no time limit**.
+
+
 
 
 Computed per case, on the **native image grid** (predictions are resampled back to

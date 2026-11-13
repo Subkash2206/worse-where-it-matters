@@ -1,0 +1,97 @@
+# -----------------------------------------------------------------------------
+# False-positive cost of TTA on polyp-free colonoscopy (HyperKvasir "cecum").
+#
+#   python scripts/validate_external.py  --config configs/external/hyperkvasir_cecum.yaml
+#   python scripts/evaluate_external.py  --config configs/external/hyperkvasir_cecum.yaml \
+#       --models cvc_clinicdb/unet_resnet50_detrules \
+#       --datasets hyperkvasir_cecum --folds 0 1 2 3 4 --seeds 0 1 2
+#
+# The 1009 frames of HyperKvasir's `cecum` class show a normal caecum and contain **no
+# polyp**, and the collection ships no masks.  `dataset.references: empty` therefore
+# declares the truth explicitly: every reference is the empty mask at the frame's own
+# resolution (built in memory by melba/data/polyp_external.py, nothing is written to the
+# dataset directory).  Every prediction on these frames is a false positive, so the
+# question is not Dice but how often a method invents a polyp at all.
+#
+# Consequently there is no Dice/HD95 here (without a lesion they are undefined, not zero)
+# and the metric list asks for the reference-free descriptors instead:
+#
+#   pred_empty    1 when the method's mask is empty, 0 when it reports a polyp
+#   pred_area_px  size of the reported polyp in native pixels
+#   max_prob      peak of the aggregated probability map (how close to 0.5 it came)
+#
+# Preprocessing is inherited unchanged from the internal CVC-ClinicDB config (352x352,
+# ImageNet normalisation, native-resolution reference), so these numbers come from exactly
+# the code path that produced the internal and external polyp results.
+# -----------------------------------------------------------------------------
+defaults:
+  - ../cvc_clinicdb/unet_resnet50.yaml
+
+experiment:
+  name: external_hyperkvasir_cecum
+  description: "HyperKvasir cecum (polyp-free): false-alarm cost of TTA and detection rules"
+
+dataset:
+  kind: external_polyp
+  name: hyperkvasir_cecum
+  root: .                        # absolute paths below, resolved as given
+  images_dir: C:/Users/subka/Documents/datasets/polyp/hyperkvasir_cecum
+  masks_dir: null                # the collection has no masks
+  references: empty              # ... so every reference is empty (see the header)
+  image_extensions: [.jpg, .jpeg, .png, .tif, .tiff, .bmp]
+  image_size: [352, 352]         # exactly the internal training input size
+  in_channels: 3
+  num_classes: 1
+  mask_threshold: null           # unused: there is no mask to binarise
+  spacing_mm: [1.0, 1.0]         # no calibrated spacing: areas are in pixels
+  normalization:
+    kind: imagenet
+
+external:
+  datasets:
+    hyperkvasir_cecum:
+      label: "HyperKvasir - normal cecum (polyp-free)"
+      images_dir: C:/Users/subka/Documents/datasets/polyp/hyperkvasir_cecum
+      masks_dir: null
+      references: empty
+
+metrics:
+  # no dice, no hd95: a polyp-free cohort has nothing to overlap or measure a surface to
+  names:
+    - pred_empty
+    - pred_area_px
+    - max_prob
+    - entropy_mean
+    - variance_mean
+    - view_disagreement
+    - per_view_dice_mean
+    - per_view_dice_std
+    - view_pairwise_dice
+  hd_percentile: 95.0
+  connectivity: 1
+  boundary_tolerance_mm: 2.0
+  empty_policy: nan
+
+evaluation:
+  split: test
+  output_dir: results/external_${dataset.name}/evaluation
+  write_summary: true
+  save_probability_maps: false   # 1009 frames x 15 checkpoints: nothing downstream needs them
+  probability_map_methods: []
+  probability_map_cases: null
+  # nothing here is a distance, so there is no penalised variant to emit
+  emit_penalized_metrics: false
+  uncertainty_boundary_band_px: 3
+
+runtime:
+  num_workers: 0
+  progress: false
+
+stats:
+  # one image = one independent unit (no video structure in this collection)
+  unit: group
+  primary_test: wilcoxon
+  correction: holm
+  n_bootstrap: 10000
+  bootstrap_seed: 0
+  output_dir: results/external_${dataset.name}/stats

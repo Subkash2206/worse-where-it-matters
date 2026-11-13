@@ -553,6 +553,10 @@ def run_evaluation(
                 values: dict[str, float] = {
                     name: metrics[name] for name in metric_settings.gt_names
                 }
+                # reference-free descriptors (polyp-free cohorts): always defined
+                values.update(
+                    {name: metrics[name] for name in metric_settings.prediction_names}
+                )
                 values.update(
                     {name: uncertainty[name] for name in metric_settings.uncertainty_names}
                 )

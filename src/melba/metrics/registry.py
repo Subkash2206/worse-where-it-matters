@@ -40,6 +40,7 @@ __all__ = [
     "GT_METRICS",
     "MetricSettings",
     "OVERLAP_METRICS",
+    "PRESENCE_METRICS",
     "SURFACE_METRICS",
     "UNCERTAINTY_METRICS",
     "VOLUME_METRICS",
@@ -56,7 +57,13 @@ VOLUME_METRICS: tuple[str, ...] = (
     "volume_difference_mm3",
 )
 GT_METRICS: tuple[str, ...] = OVERLAP_METRICS + DISTANCE_METRICS + VOLUME_METRICS
-AVAILABLE_METRICS: tuple[str, ...] = GT_METRICS + UNCERTAINTY_METRICS
+#: descriptors of the **prediction alone**, i.e. metrics that need no reference mask.
+#: They exist for a polyp-free external cohort (HyperKvasir "cecum"): every reference is
+#: empty there, so Dice/HD95 are undefined and the only honest question is how often a
+#: method invents a polyp (``pred_empty``), how much it invents (``pred_area_px``) and how
+#: confident the underlying probability map was (``max_prob``).
+PRESENCE_METRICS: tuple[str, ...] = ("pred_empty", "pred_area_px", "max_prob")
+AVAILABLE_METRICS: tuple[str, ...] = GT_METRICS + PRESENCE_METRICS + UNCERTAINTY_METRICS
 EMPTY_POLICIES: tuple[str, ...] = ("nan", "penalize")
 EMPTY_FLAGS: tuple[str, ...] = ("both_nonempty", "both_empty", "pred_empty", "gt_empty")
 #: similarity scores that are conventionally 1.0 when *both* masks are empty (Dice and
@@ -122,6 +129,11 @@ class MetricSettings:
     def uncertainty_names(self) -> tuple[str, ...]:
         """Per-view descriptors computed by the runner from the view stack."""
         return tuple(name for name in self.names if name in UNCERTAINTY_METRICS)
+
+    @property
+    def prediction_names(self) -> tuple[str, ...]:
+        """Reference-free descriptors of the prediction (see :data:`PRESENCE_METRICS`)."""
+        return tuple(name for name in self.names if name in PRESENCE_METRICS)
 
 
     @classmethod
@@ -193,7 +205,8 @@ def compute_case_metrics(
     Returns
     -------
     dict
-        One entry per requested ground-truth metric plus ``empty_flag``.
+        One entry per requested ground-truth metric, one per requested reference-free
+        descriptor (:data:`PRESENCE_METRICS`), plus ``empty_flag``.
     """
     settings = settings or MetricSettings()
     if pred_mask is not None:
@@ -318,6 +331,20 @@ def compute_case_metrics(
             if name in SCORING_METRICS:
                 value = 0.0 if settings.empty_policy == "penalize" else float("nan")
         results[name] = float(value)
+
+    # Reference-free descriptors.  They are defined for *every* case, including the
+    # all-empty references of a polyp-free cohort, so "how often does this method invent a
+    # polyp, and how big is it" has a number without inventing a Dice on an empty mask.
+    if settings.prediction_names:
+        probability = np.asarray(pred, dtype=np.float64)
+        for name in settings.prediction_names:
+            if name == "pred_empty":
+                value = 0.0 if bool(pred_bin.any()) else 1.0
+            elif name == "pred_area_px":
+                value = float(pred_bin.sum())
+            else:  # max_prob
+                value = float(probability.max()) if probability.size else float("nan")
+            results[name] = float(value)
 
     results["empty_flag"] = flag
     return results

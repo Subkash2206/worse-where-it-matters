@@ -105,7 +105,10 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "dataset.name": name,
                 "dataset.images_dir": entry["images_dir"],
-                "dataset.masks_dir": entry["masks_dir"],
+                "dataset.masks_dir": entry.get("masks_dir"),
+                "dataset.references": entry.get(
+                    "references", config.get("dataset.references", "mask")
+                ),
             }
         )
         try:
@@ -146,7 +149,11 @@ def main(argv: list[str] | None = None) -> int:
             [
                 {"field": "label", "value": report["label"]},
                 {"field": "images_dir", "value": report["images_dir"]},
-                {"field": "masks_dir", "value": report["masks_dir"]},
+                {
+                    "field": "masks_dir",
+                    "value": report["masks_dir"] or "(none: references are empty)",
+                },
+                {"field": "references", "value": report.get("references", "mask")},
                 {"field": "n_cases", "value": report["n_cases"]},
                 {"field": "inference_size", "value": report["inference_size"]},
                 {"field": "spacing_mm", "value": report["spacing_mm"]},

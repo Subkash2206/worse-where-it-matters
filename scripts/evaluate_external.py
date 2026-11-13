@@ -88,7 +88,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def _metrics(config: Config) -> tuple[str, ...]:
     from melba.metrics import MetricSettings
 
-    return MetricSettings.from_config(config).gt_names
+    settings = MetricSettings.from_config(config)
+    # the reference-free descriptors of a polyp-free cohort are pooled exactly like the
+    # quality metrics, so the external tables summarise them per case across checkpoints
+    return settings.gt_names + settings.prediction_names
+
+
+def _references(external: Config, entry: dict[str, Any] | None = None) -> str:
+    """``"mask"`` or ``"empty"``: does this external dataset ship reference masks?
+
+    Read from ``external.datasets.<name>.references`` and falling back to
+    ``dataset.references``, mirroring the loader (``melba.data.polyp_external``).
+    """
+    source: dict[str, Any] = dict(entry or {})
+    raw = source.get("references", external.get("dataset.references", "mask"))
+    text = str(raw if raw is not None else "mask").strip().lower()
+    return "empty" if text in {"empty", "polyp_free", "polyp-free"} else "mask"
 
 
 def _external_config(
@@ -114,11 +129,20 @@ def _external_config(
     settings = external.section("dataset")
     entry = dict(entry or {})
     images_dir = entry.get("images_dir") or settings.get("images_dir")
-    masks_dir = entry.get("masks_dir") or settings.get("masks_dir")
-    if images_dir is None or masks_dir is None:  # pragma: no cover - guarded by the YAML
+    references = _references(external, entry)
+    masks_dir = entry["masks_dir"] if "masks_dir" in entry else settings.get("masks_dir")
+    if references == "empty":
+        # a reference-free cohort: no mask directory at all, every reference is empty
+        masks_dir = None
+    if images_dir is None:  # pragma: no cover - guarded by the YAML
         raise ConfigError(
-            f"external dataset {dataset_name!r} has no images_dir/masks_dir in "
-            "external.datasets nor in dataset.images_dir/dataset.masks_dir"
+            f"external dataset {dataset_name!r} has no images_dir in external.datasets "
+            "nor in dataset.images_dir"
+        )
+    if references != "empty" and masks_dir is None:  # pragma: no cover - guarded by the YAML
+        raise ConfigError(
+            f"external dataset {dataset_name!r} has no masks_dir in external.datasets nor in "
+            "dataset.masks_dir; declare `references: empty` if the dataset has no masks"
         )
     overrides: dict[str, Any] = {
         "experiment.name": f"{dataset_name}__{model_config_path.stem}",
@@ -126,11 +150,12 @@ def _external_config(
         "dataset.name": dataset_name,
         "dataset.images_dir": images_dir,
         "dataset.masks_dir": masks_dir,
+        "dataset.references": references,
         "dataset.image_extensions": settings.get("image_extensions"),
         "dataset.mask_threshold": settings.get("mask_threshold"),
         "dataset.image_size": settings.get("image_size"),
         "dataset.spacing_mm": settings.get("spacing_mm"),
-        "metrics.names": external.section("metrics").get("names"),
+        "metrics.names": entry.get("metrics") or external.section("metrics").get("names"),
         "metrics.empty_policy": external.section("metrics").get("empty_policy"),
         "model.checkpoint": str(checkpoint),
         "evaluation.split": str(external.get("evaluation.split", "test")),
@@ -321,20 +346,39 @@ def _write_external_markdown(
     entry: dict[str, Any],
     tables: dict[str, pd.DataFrame],
     n_models: int,
+    *,
+    maskless: bool = False,
+    metrics: Sequence[str] = (),
 ) -> None:
     """One markdown report per external dataset (internal vs external kept explicit)."""
     spread = tables.get("external_model_spread", pd.DataFrame())
     paired = tables.get("external_paired", pd.DataFrame())
     detection = tables.get("external_detection", pd.DataFrame())
     false_positive = tables.get("external_false_positive", pd.DataFrame())
+    quality = ["dice", "hd95", "boundary_f1", "assd"]
     spread_view = (
-        spread.loc[spread["metric"].isin(["dice", "hd95", "boundary_f1", "assd"])]
-        if not spread.empty
+        spread.loc[spread["metric"].isin(quality)]
+        if not spread.empty and spread["metric"].isin(quality).any()
         else spread
     )
     paired_view = (
         paired.loc[paired["metric"].isin(["dice", "hd95"])] if not paired.empty else paired
     )
+    if maskless:
+        false_positive_note = (
+            "**This is the primary table of this dataset.** Every frame is polyp-free, so "
+            "every reference is empty: `false_positive_rate` is the share of frames on which "
+            "the method reports a polyp at all, `correct_to_fp`/`fp_to_correct` count the "
+            "frames the method invents that `baseline` does not (and vice versa), and "
+            "`mcnemar_p` is the exact test on those discordant frames. There is no Dice or "
+            "HD95 here: without a lesion they are undefined, not zero."
+        )
+    else:
+        false_positive_note = (
+            "None of the three external collections contains an empty reference mask, so this "
+            "table is expected to report `n_cases = 0`; it is kept because the internal BraTS "
+            "runs use the same code path and the two scopes must stay comparable."
+        )
     sections = [
         (
             "Per-model spread over the internal checkpoints (external data)",
@@ -360,9 +404,7 @@ def _write_external_markdown(
         (
             "False positives on empty references",
             false_positive,
-            "None of the three external collections contains an empty reference mask, so this "
-            "table is expected to report `n_cases = 0`; it is kept because the internal BraTS "
-            "runs use the same code path and the two scopes must stay comparable.",
+            false_positive_note,
         ),
     ]
     write_markdown(
@@ -370,7 +412,8 @@ def _write_external_markdown(
         title=f"MELBA external validation - {entry.get('label', dataset_dir.name)}",
         preamble=(
             f"External dataset `{entry.get('label', dataset_dir.name)}` "
-            f"(`{entry.get('images_dir')}`) scored by {n_models} internal checkpoints. Scope: "
+            f"(`{entry.get('images_dir')}`) scored by {n_models} internal checkpoints over "
+            f"{', '.join(metrics) if metrics else 'the configured metrics'}. Scope: "
             "**external** - never trained on. The internal CVC-ClinicDB tables live in "
             "`results/aggregate_cvc_clinicdb_*`; every table here is labelled `scope: external`."
         ),
@@ -439,6 +482,10 @@ def main(argv: list[str] | None = None) -> int:
         entry = available[dataset_name]
         dataset_dir = output_root / f"external_{dataset_name}"
         (dataset_dir / "evaluation").mkdir(parents=True, exist_ok=True)
+        # a polyp-free cohort (references: empty) has no Dice/HD95 to pool: its metrics are
+        # the reference-free descriptors, and its false-positive table is the result
+        maskless = _references(external, entry) == "empty"
+        dataset_metrics = tuple(entry.get("metrics") or _metrics(external))
         print(f"\n=== {dataset_name} ({entry.get('label', dataset_name)}) -> {dataset_dir}")
         # size and method set of the dataset come from its own config, never from a guess
         expectations: tuple[int, list[str]] | None = None
@@ -513,7 +560,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  pooling {len(frames)} checkpoint run(s)")
         tables = external_tables(
             frames,
-            metrics=_metrics(external),
+            metrics=dataset_metrics,
             control="baseline",
             treatments=("tta2", "tta4", "tta8"),
             unit=unit,
@@ -523,6 +570,8 @@ def main(argv: list[str] | None = None) -> int:
             correction=correction,
             primary_test=primary_test,
             alternative=alternative,
+            # a reference-free cohort reports detection, not a paired quality gain
+            paired_metrics=() if maskless else None,
         )
         write_tables(
             tables,
@@ -533,6 +582,8 @@ def main(argv: list[str] | None = None) -> int:
                 "label": entry.get("label", dataset_name),
                 "images_dir": entry.get("images_dir"),
                 "masks_dir": entry.get("masks_dir"),
+                "references": "empty" if maskless else "mask",
+                "metrics": list(dataset_metrics),
                 "internal_models": [path.stem for path in model_paths],
                 "folds": list(args.folds),
                 "seeds": list(args.seeds),
@@ -543,7 +594,14 @@ def main(argv: list[str] | None = None) -> int:
                 "git_revision": git_revision(),
             },
         )
-        _write_external_markdown(dataset_dir, entry, tables, len(frames))
+        _write_external_markdown(
+            dataset_dir,
+            entry,
+            tables,
+            len(frames),
+            maskless=maskless,
+            metrics=dataset_metrics,
+        )
         print(f"  written to {dataset_dir}")
 
     print(f"\ntotal wall clock: {(time.perf_counter() - started) / 60.0:.1f} min")

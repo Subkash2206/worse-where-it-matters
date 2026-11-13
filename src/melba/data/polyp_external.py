@@ -22,6 +22,13 @@ Design decisions, and why:
   ``dataset.image_size`` (352x352) for inference exactly like the CVC training pipeline,
   while ``mask_native`` stays at the original resolution, so Dice and the distance metrics
   are computed on the native grid in the config's spacing (pixels for these datasets).
+* **A dataset may have no masks at all.** ``dataset.references: empty`` declares a
+  polyp-free cohort (HyperKvasir ``cecum``): every reference is then the empty mask at the
+  frame's own resolution, which the evaluation reports as ``empty_flag`` ``gt_empty`` /
+  ``both_empty``.  Nothing is fabricated on disk - the reference is built in memory - and
+  Dice/HD95 must not be requested for such a dataset, because they are undefined without a
+  lesion (the config asks for the reference-free ``pred_empty`` / ``pred_area_px`` /
+  ``max_prob`` descriptors instead).
 """
 
 from __future__ import annotations
@@ -44,9 +51,11 @@ __all__ = [
     "DEFAULT_IMAGE_EXTENSIONS",
     "ExternalPolypDataset",
     "ExternalPolypItem",
+    "REFERENCE_MODES",
     "binarise_mask",
     "discover_external_items",
     "read_external_case",
+    "reference_mode",
     "validate_external_dataset",
 ]
 
@@ -59,14 +68,43 @@ _TIFF_EXTENSIONS = {".tif", ".tiff"}
 
 @dataclass(frozen=True)
 class ExternalPolypItem:
-    """One external frame: identifiers plus the resolved image and mask paths."""
+    """One external frame: identifiers plus the resolved image and mask paths.
+
+    ``mask_path`` is ``None`` for a reference-free dataset (``dataset.references: empty``):
+    the frame has no mask file and every reference is empty by construction.
+    """
 
     case_id: str
     group_id: str
     split: str
     image_path: Path
-    mask_path: Path
+    mask_path: Path | None
     fold: int = 0
+
+
+#: how the reference of an external dataset is obtained
+REFERENCE_MODES: tuple[str, ...] = ("mask", "empty")
+
+
+def reference_mode(config: Config) -> str:
+    """``"mask"`` (paired masks required) or ``"empty"`` (no mask; every reference is empty).
+
+    The key is ``dataset.references``; it defaults to ``"mask"``, so every existing external
+    config keeps its behaviour.  ``"empty"`` must not be combined with a ``masks_dir``: a
+    dataset that has masks and is scored as if it had none would report a false-alarm rate
+    of 100 %.
+    """
+    raw = config.get("dataset.references", "mask")
+    if raw is None:
+        return "mask"
+    mode = str(raw).strip().lower()
+    if mode in {"mask", "masks"}:
+        return "mask"
+    if mode in {"empty", "polyp_free", "polyp-free"}:
+        return "empty"
+    raise ConfigError(
+        f"dataset.references must be one of {list(REFERENCE_MODES)}, got {raw!r}"
+    )
 
 
 def _extensions(config: Config) -> tuple[str, ...]:
@@ -108,6 +146,10 @@ def _list_files(directory: Path, extensions: Sequence[str]) -> list[Path]:
 def discover_external_items(config: Config, *, split: str = "test") -> list[ExternalPolypItem]:
     """Every (image, mask) pair of the external dataset declared by the config.
 
+    A reference-free dataset (``dataset.references: empty``) yields one item per image with
+    ``mask_path=None``; only the images are paired (with themselves), because there is no
+    mask to pair them to.
+
     Raises
     ------
     ConfigError
@@ -116,8 +158,32 @@ def discover_external_items(config: Config, *, split: str = "test") -> list[Exte
         failure this loader must not have.
     """
     images_dir = config.require_path("dataset.images_dir", must_exist=True)
-    masks_dir = config.require_path("dataset.masks_dir", must_exist=True)
     image_extensions = _extensions(config)
+    if reference_mode(config) == "empty":
+        raw_masks = config.get("dataset.masks_dir")
+        if raw_masks not in (None, ""):
+            raise ConfigError(
+                f"dataset.references is 'empty' but dataset.masks_dir is set ({raw_masks!r}); "
+                "a reference-free dataset must not point at masks"
+            )
+        image_paths = _list_files(images_dir, image_extensions)
+        if not image_paths:
+            raise ConfigError(
+                f"No images with extension(s) {list(image_extensions)} in {images_dir}"
+            )
+        # no mask files: every reference is the empty mask at the frame's own resolution
+        return [
+            ExternalPolypItem(
+                case_id=path.stem,
+                group_id=path.stem,  # one image is one unit
+                split=split,
+                image_path=path,
+                mask_path=None,
+            )
+            for path in image_paths
+        ]
+
+    masks_dir = config.require_path("dataset.masks_dir", must_exist=True)
     mask_extensions = _mask_extensions(config, image_extensions)
 
     image_paths = _list_files(images_dir, image_extensions)
@@ -265,8 +331,16 @@ def binarise_mask(mask: np.ndarray, threshold: int | None) -> tuple[np.ndarray, 
 def read_external_case(
     item: ExternalPolypItem, *, threshold: int | None = None
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Read one case: ``(rgb uint8, raw mask, binary mask)`` at the native resolution."""
+    """Read one case: ``(rgb uint8, raw mask, binary mask)`` at the native resolution.
+
+    For a reference-free item (``mask_path is None``) the reference is the all-zero mask at
+    the frame's own resolution: the cohort is polyp-free *by definition*, so an empty
+    reference is the truth and not a missing file.
+    """
     image = _read_image(item.image_path)
+    if item.mask_path is None:
+        empty = np.zeros(image.shape[:2], dtype=np.uint8)
+        return image, empty, empty.copy()
     mask = _read_mask(item.mask_path)
     if mask.shape != image.shape[:2]:
         raise ConfigError(
@@ -289,6 +363,7 @@ def validate_external_dataset(
     items = discover_external_items(config, split=split)
     raw_threshold = config.get("dataset.mask_threshold")
     threshold = None if raw_threshold is None else int(raw_threshold)
+    mode = reference_mode(config)
 
     sizes: list[tuple[int, int]] = []
     extensions: dict[str, int] = {}
@@ -304,12 +379,19 @@ def validate_external_dataset(
         iterator = tqdm(items, desc=str(config.get("dataset.name", "external")), unit="case")
     for item in iterator:
         image, mask, binary = read_external_case(item, threshold=threshold)
-        _binary, used = binarise_mask(mask, threshold)
-        thresholds_used[used] = thresholds_used.get(used, 0) + 1
         sizes.append((int(image.shape[0]), int(image.shape[1])))
         extensions[item.image_path.suffix.lower()] = (
             extensions.get(item.image_path.suffix.lower(), 0) + 1
         )
+        if mode == "empty":
+            # nothing to report: the reference is synthesised, so its value set and
+            # threshold would describe this loader rather than the dataset
+            area = 0
+            foreground_pixels.append(area)
+            empty_masks.append(item.case_id)
+            continue
+        _binary, used = binarise_mask(mask, threshold)
+        thresholds_used[used] = thresholds_used.get(used, 0) + 1
         mask_extensions[item.mask_path.suffix.lower()] = (
             mask_extensions.get(item.mask_path.suffix.lower(), 0) + 1
         )
@@ -323,10 +405,17 @@ def validate_external_dataset(
 
     array = np.array(sizes, dtype=np.int64)
     areas = np.array(foreground_pixels, dtype=np.int64)
+    raw_masks_dir = config.get("dataset.masks_dir")
+    masks_dir_text = (
+        str(config.require_path("dataset.masks_dir"))
+        if mode != "empty" and raw_masks_dir
+        else None
+    )
     return {
         "dataset": str(config.get("dataset.name", "external")),
         "images_dir": str(config.require_path("dataset.images_dir")),
-        "masks_dir": str(config.require_path("dataset.masks_dir")),
+        "masks_dir": masks_dir_text,
+        "references": mode,
         "read_only": True,
         "n_cases": len(items),
         "image_extensions": dict(sorted(extensions.items())),

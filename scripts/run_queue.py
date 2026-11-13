@@ -264,12 +264,18 @@ def step_log_path(step: Mapping[str, Any]) -> Path:
 def wait_for_pid_file(
     pid_file: Path,
     *,
-    max_wait_hours: float,
+    max_wait_hours: float | None,
     log,
     poll_seconds: float = 120.0,
 ) -> bool:
-    """Block until the job named by ``pid_file`` is gone (True) or the wait expires."""
-    deadline = time.time() + float(max_wait_hours) * 3600.0
+    """Block until the job named by ``pid_file`` is gone (True) or the wait expires.
+
+    ``max_wait_hours=None`` means *no time limit*: the queue waits for as long as the guarded
+    job is alive, which is what an overnight queue that must never share the GPU with a
+    longer run needs.  Any positive value keeps the old behaviour of starting anyway once
+    the deadline has passed.
+    """
+    deadline = None if max_wait_hours is None else time.time() + float(max_wait_hours) * 3600.0
     announced = False
     while True:
         pid = read_pid_file(pid_file)
@@ -280,7 +286,7 @@ def wait_for_pid_file(
                     "queue; stop that job to release the guard early"
                 )
                 announced = True
-            if time.time() >= deadline:
+            if deadline is not None and time.time() >= deadline:
                 log(f"wait expired after {max_wait_hours} h; starting the queue anyway")
                 return False
             time.sleep(float(poll_seconds))
@@ -338,7 +344,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         print(f"queue '{name}' from {args.queue}")
         if queue.get("wait_for_pid_file"):
-            print(f"  0. wait until {queue['wait_for_pid_file']} (and its pid) is gone")
+            limit = queue.get("max_wait_hours", 12.0)
+            wait_text = "no time limit" if limit is None else f"max {limit} h"
+            print(
+                f"  0. wait until {queue['wait_for_pid_file']} (and its pid) is gone "
+                f"({wait_text})"
+            )
         for index, step in enumerate(steps, start=1):
             command = " ".join(str(part) for part in step_command(step))
             print(f"  {index}. {step['name']}  [{step.get('kind', 'grid')}]")
@@ -363,9 +374,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if queue.get("wait_for_pid_file"):
             guard = Path(str(queue["wait_for_pid_file"]))
+            # explicit `max_wait_hours: null` = wait for as long as the guarded job runs
+            raw_wait = queue.get("max_wait_hours", 12.0)
             wait_for_pid_file(
                 guard if guard.is_absolute() else _REPO_ROOT / guard,
-                max_wait_hours=float(queue.get("max_wait_hours", 12.0)),
+                max_wait_hours=None if raw_wait is None else float(raw_wait),
                 log=log,
             )
         log(f"queue start: {len(steps)} step(s) from {args.queue}, pid {os.getpid()}")

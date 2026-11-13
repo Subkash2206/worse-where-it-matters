@@ -9,7 +9,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from run_queue import load_queue, step_command, step_log_path  # noqa: E402
+from run_queue import (  # noqa: E402
+    load_queue,
+    step_command,
+    step_log_path,
+    wait_for_pid_file,
+)
 
 QUEUE = """
 name: test_queue
@@ -176,3 +181,32 @@ def test_load_queue_rejects_subgroup_without_models(tmp_path) -> None:
     )
     with pytest.raises(ValueError, match="models"):
         load_queue(source)
+
+
+def test_empty_wait_means_no_time_limit(tmp_path) -> None:
+    """`max_wait_hours: null` must mean "wait for ever", not crash on float(None)."""
+    source = tmp_path / "unlimited.yaml"
+    source.write_text(
+        """
+name: unlimited
+wait_for_pid_file: logs/some_grid.pid
+max_wait_hours: null
+steps:
+  - name: only
+    config: configs/cvc_clinicdb/unet_resnet50.yaml
+""",
+        encoding="utf-8",
+    )
+    queue = load_queue(source)
+    assert queue["max_wait_hours"] is None
+
+    messages: list[str] = []
+    # no pid file at all -> the guard is satisfied immediately, with no deadline involved
+    assert (
+        wait_for_pid_file(
+            tmp_path / "missing.pid", max_wait_hours=None, log=messages.append
+        )
+        is True
+    )
+    assert messages == []
+

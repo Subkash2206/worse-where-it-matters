@@ -1,0 +1,109 @@
+# -----------------------------------------------------------------------------
+# Polyp-free false-alarm study + SegFormer detection rules: ONE detached queue, strictly
+# sequential, exactly one GPU job at a time.
+#
+#   Start-Process python -ArgumentList '-u','scripts\run_queue.py','--queue',
+#       'queues\hyperkvasir_segformer_rules.yaml' -WorkingDirectory . -WindowStyle Hidden
+#
+# The guard `wait_for_pid_file` has NO time limit (`max_wait_hours: null`): the queue waits
+# for logs/paper_rules_segformer.pid - and, more generally, for whatever job owns it - to be
+# gone, however long that takes, and only then takes the GPU.  Nothing is retrained: both
+# grids reuse existing checkpoints and run the evaluation only.
+#
+# Steps and rough wall-clock estimates on this machine (RTX 4070 Ti SUPER; the UNet costs
+# ~0.3 s/frame/checkpoint at 352x352 with 15 forward passes over the 1+2+4+8 views, the
+# MiT-B2 SegFormer ~2x that):
+#
+#   a. hyperkvasir_cecum x UNet    15 ckpt x 1009 frames   ~1.3-1.6 h
+#   b. hyperkvasir_cecum x SegFormer 15 ckpt x 1009 frames ~2.5-3.5 h
+#   c. CVC-ClinicDB internal SegFormer detrules 15 ckpt     ~1.5-2.0 h
+#   d. CVC-ColonDB + ETIS SegFormer detrules 15 ckpt        ~1.5-2.0 h
+#   e. two CPU reports (false alarms, detection rules)      ~2-5 min
+#                                                          --------------
+#                                                          ~7-9.5 h total
+#
+# Every step resumes: a finished per-case CSV is skipped, so re-running the queue after a
+# crash continues where it stopped.
+# -----------------------------------------------------------------------------
+name: hyperkvasir_segformer_rules
+
+wait_for_pid_file: logs/paper_rules_segformer.pid
+max_wait_hours: null      # NO time limit: wait for as long as that job runs
+
+steps:
+  # ---------------------------------------------------------------- a. UNet, polyp-free
+  - name: hk_unet_detrules
+    kind: external
+    config: configs/external/hyperkvasir_cecum.yaml
+    models: [cvc_clinicdb/unet_resnet50_detrules]
+    datasets: [hyperkvasir_cecum]
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    output_dir: results/false_alarm/unet
+    n_bootstrap: 10000
+    attempts: 2
+
+  # ---------------------------------------------------------- b. SegFormer, polyp-free
+  - name: hk_segformer_detrules
+    kind: external
+    config: configs/external/hyperkvasir_cecum.yaml
+    models: [cvc_clinicdb/segformer_mit_b2_detrules]
+    datasets: [hyperkvasir_cecum]
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    output_dir: results/false_alarm/segformer
+    n_bootstrap: 10000
+    attempts: 2
+
+  # ------------------------------------------------- c. SegFormer, internal CVC-ClinicDB
+  - name: cvc_segformer_detrules
+    kind: grid
+    config: configs/cvc_clinicdb/segformer_mit_b2_detrules.yaml
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    attempts: 2
+
+  # --------------------------------------- d. SegFormer, external ColonDB + ETIS-Larib
+  - name: segformer_external_detrules
+    kind: external
+    config: configs/external/polyp_external.yaml
+    models: [cvc_clinicdb/segformer_mit_b2_detrules]
+    datasets: [cvc_colondb, etis_larib]
+    folds: [0, 1, 2, 3, 4]
+    seeds: [0, 1, 2]
+    output_dir: results/detrules_segformer
+    n_bootstrap: 10000
+    attempts: 2
+
+  # ------------------------------------------------- e. reports (CPU only, no GPU)
+  # (a)/(b): false-alarm rate per method, majority over checkpoints, median false area,
+  # exact McNemar vs baseline and vs tta8.
+  - name: false_alarm_tables
+    kind: script
+    script: scripts/false_alarm_report.py
+    args:
+      - --run
+      - unet=results/false_alarm/unet
+      - --run
+      - segformer=results/false_alarm/segformer
+      - --output-dir
+      - results/false_alarm/tables
+
+  # (c)/(d): the same tables as results/detection_rules (means, misses vs tta8 with McNemar,
+  # paired both_nonempty and all-case hd95_penalized), under their own output directory so
+  # the UNet numbers stay untouched.  --brats points at a non-existent path on purpose: this
+  # study has no BraTS scope.
+  - name: detection_rules_segformer
+    kind: script
+    script: scripts/detection_rules_report.py
+    args:
+      - --internal
+      - results/cvc_clinicdb_segformer_mit_b2_detrules/evaluation
+      - --external-root
+      - results/detrules_segformer
+      - --brats
+      - results/no_brats_in_this_study
+      - --output-dir
+      - results/detection_rules_segformer
+      - --n-bootstrap
+      - "10000"
