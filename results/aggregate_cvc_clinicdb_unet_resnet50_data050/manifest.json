@@ -1,0 +1,67 @@
+{
+  "ci": 0.95,
+  "config_hash": "419354d2ef75b617",
+  "config_path": "C:\\Users\\subka\\Documents\\melba-tta\\configs\\cvc_clinicdb\\unet_resnet50_data050.yaml",
+  "control": "baseline",
+  "correction": "holm",
+  "folds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "generated_utc": "2026-11-02T11:47:09Z",
+  "metrics": [
+    "dice",
+    "jaccard",
+    "precision",
+    "recall",
+    "hd",
+    "hd95",
+    "hd95_pooled",
+    "assd",
+    "boundary_f1"
+  ],
+  "n_bootstrap": 10000,
+  "notes": [
+    "ensemble skipped: needs seeds [0, 1, 2], found [0]"
+  ],
+  "runs": [
+    {
+      "fold": 0,
+      "per_case": "C:\\Users\\subka\\Documents\\melba-tta\\results\\cvc_clinicdb_unet_resnet50_data050\\evaluation\\cvc_clinicdb_test_fold0_seed0_per_case.csv",
+      "seed": 0
+    },
+    {
+      "fold": 1,
+      "per_case": "C:\\Users\\subka\\Documents\\melba-tta\\results\\cvc_clinicdb_unet_resnet50_data050\\evaluation\\cvc_clinicdb_test_fold1_seed0_per_case.csv",
+      "seed": 0
+    },
+    {
+      "fold": 2,
+      "per_case": "C:\\Users\\subka\\Documents\\melba-tta\\results\\cvc_clinicdb_unet_resnet50_data050\\evaluation\\cvc_clinicdb_test_fold2_seed0_per_case.csv",
+      "seed": 0
+    },
+    {
+      "fold": 3,
+      "per_case": "C:\\Users\\subka\\Documents\\melba-tta\\results\\cvc_clinicdb_unet_resnet50_data050\\evaluation\\cvc_clinicdb_test_fold3_seed0_per_case.csv",
+      "seed": 0
+    },
+    {
+      "fold": 4,
+      "per_case": "C:\\Users\\subka\\Documents\\melba-tta\\results\\cvc_clinicdb_unet_resnet50_data050\\evaluation\\cvc_clinicdb_test_fold4_seed0_per_case.csv",
+      "seed": 0
+    }
+  ],
+  "seeds": [
+    0
+  ],
+  "threshold": 0.5,
+  "treatments": [
+    "tta2",
+    "tta4",
+    "tta8"
+  ],
+  "unit": "group"
+}

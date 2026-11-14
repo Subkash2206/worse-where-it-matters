@@ -1,0 +1,29 @@
+{
+  "folds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "git_revision": "c9e493d-dirty",
+  "metrics": [
+    "dice",
+    "hd95"
+  ],
+  "models": [
+    "cvc_clinicdb/unet_resnet50",
+    "cvc_clinicdb/swinunetr_2d"
+  ],
+  "n_bootstrap": 1000,
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "size_bins": [
+    "small",
+    "medium",
+    "large"
+  ]
+}

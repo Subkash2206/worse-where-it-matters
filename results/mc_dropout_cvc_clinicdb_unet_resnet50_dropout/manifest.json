@@ -1,0 +1,19 @@
+{
+  "config": "C:\\Users\\subka\\Documents\\melba-tta\\configs\\cvc_clinicdb\\unet_resnet50_dropout.yaml",
+  "experiment": "cvc_clinicdb_unet_resnet50_dropout",
+  "folds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "git_revision": "16b9d9f-dirty",
+  "method": "mcdropout_8",
+  "n_bootstrap": 2000,
+  "seeds": [
+    0,
+    1,
+    2
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "dataset": "hyperkvasir_cecum",
+  "git_revision": "c7552d1",
+  "majority": 0.5,
+  "metrics": [
+    "pred_empty",
+    "pred_area_px",
+    "max_prob"
+  ],
+  "runs": {
+    "segformer": "C:\\Users\\subka\\Documents\\melba-tta\\results\\false_alarm\\segformer",
+    "unet": "C:\\Users\\subka\\Documents\\melba-tta\\results\\false_alarm\\unet"
+  }
+}

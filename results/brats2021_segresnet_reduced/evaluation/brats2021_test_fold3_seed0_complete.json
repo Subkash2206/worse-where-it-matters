@@ -1,0 +1,13 @@
+{
+  "finished_utc": "2026-11-09T12:30:05Z",
+  "fold": 3,
+  "methods": [
+    "baseline",
+    "tta2",
+    "tta4",
+    "tta8"
+  ],
+  "n_cases": 250,
+  "per_case_csv": "C:\\Users\\subka\\Documents\\melba-tta\\results\\brats2021_segresnet_reduced\\evaluation\\brats2021_test_fold3_seed0_per_case.csv",
+  "seed": 0
+}

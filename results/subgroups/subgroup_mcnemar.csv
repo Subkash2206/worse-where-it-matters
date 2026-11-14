@@ -1,0 +1,19 @@
+model,size_bin,control,treatment,unit,n_units,both_nonempty,new_misses,recovered,both_empty,net_change,mcnemar_p,mcnemar_p_adjusted,correction,cutoff_low_px,cutoff_high_px
+cvc_clinicdb/unet_resnet50,small,baseline,tta2,case,204,193,5,0,6,-5,0.0625,0.5,holm across 9 bin x method tests,4923.666666666668,11247.333333333338
+cvc_clinicdb/unet_resnet50,small,baseline,tta4,case,204,192,6,0,6,-6,0.03125,0.28125,holm across 9 bin x method tests,4923.666666666668,11247.333333333338
+cvc_clinicdb/unet_resnet50,small,baseline,tta8,case,204,193,5,0,6,-5,0.0625,0.5,holm across 9 bin x method tests,4923.666666666668,11247.333333333338
+cvc_clinicdb/unet_resnet50,medium,baseline,tta2,case,204,198,0,0,6,0,1.0,1.0,holm across 9 bin x method tests,4923.666666666668,11247.333333333338
+cvc_clinicdb/unet_resnet50,medium,baseline,tta4,case,204,198,0,0,6,0,1.0,1.0,holm across 9 bin x method tests,4923.666666666668,11247.333333333338
+cvc_clinicdb/unet_resnet50,medium,baseline,tta8,case,204,197,1,0,6,-1,1.0,1.0,holm across 9 bin x method tests,4923.666666666668,11247.333333333338
+cvc_clinicdb/unet_resnet50,large,baseline,tta2,case,204,201,0,2,1,2,0.5,1.0,holm across 9 bin x method tests,4923.666666666668,11247.333333333338
+cvc_clinicdb/unet_resnet50,large,baseline,tta4,case,204,201,0,2,1,2,0.5,1.0,holm across 9 bin x method tests,4923.666666666668,11247.333333333338
+cvc_clinicdb/unet_resnet50,large,baseline,tta8,case,204,201,0,2,1,2,0.5,1.0,holm across 9 bin x method tests,4923.666666666668,11247.333333333338
+cvc_clinicdb/swinunetr_2d,small,baseline,tta2,case,204,204,0,0,0,0,1.0,1.0,holm across 9 bin x method tests,4923.666666666668,11247.333333333338
+cvc_clinicdb/swinunetr_2d,small,baseline,tta4,case,204,204,0,0,0,0,1.0,1.0,holm across 9 bin x method tests,4923.666666666668,11247.333333333338
+cvc_clinicdb/swinunetr_2d,small,baseline,tta8,case,204,204,0,0,0,0,1.0,1.0,holm across 9 bin x method tests,4923.666666666668,11247.333333333338
+cvc_clinicdb/swinunetr_2d,medium,baseline,tta2,case,204,204,0,0,0,0,1.0,1.0,holm across 9 bin x method tests,4923.666666666668,11247.333333333338
+cvc_clinicdb/swinunetr_2d,medium,baseline,tta4,case,204,204,0,0,0,0,1.0,1.0,holm across 9 bin x method tests,4923.666666666668,11247.333333333338
+cvc_clinicdb/swinunetr_2d,medium,baseline,tta8,case,204,204,0,0,0,0,1.0,1.0,holm across 9 bin x method tests,4923.666666666668,11247.333333333338
+cvc_clinicdb/swinunetr_2d,large,baseline,tta2,case,204,204,0,0,0,0,1.0,1.0,holm across 9 bin x method tests,4923.666666666668,11247.333333333338
+cvc_clinicdb/swinunetr_2d,large,baseline,tta4,case,204,204,0,0,0,0,1.0,1.0,holm across 9 bin x method tests,4923.666666666668,11247.333333333338
+cvc_clinicdb/swinunetr_2d,large,baseline,tta8,case,204,204,0,0,0,0,1.0,1.0,holm across 9 bin x method tests,4923.666666666668,11247.333333333338

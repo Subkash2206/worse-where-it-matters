@@ -1,0 +1,26 @@
+{
+  "folds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "git_revision": "9fba7dd",
+  "metrics": [
+    "dice",
+    "hd95"
+  ],
+  "models": [
+    "brats2021/segresnet_reduced"
+  ],
+  "n_bootstrap": 2000,
+  "seeds": [
+    0
+  ],
+  "size_bins": [
+    "small",
+    "medium",
+    "large"
+  ]
+}

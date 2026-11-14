@@ -1,0 +1,9 @@
+cohort,n,n_empty_prediction,n_near_empty_le_100px,n_entropy_roi_nan,median_area_px,median_entropy_roi,median_entropy_roi_empty_or_near
+all_cases,612,21,4,21,6573.0,0.3420900995451444,0.6922914111507725
+failures_all,85,21,4,21,1292.0,0.6012164681704739,0.6922914111507725
+failures_non_missed,64,0,4,0,3272.5,0.6012164681704739,0.6922914111507725
+failures_missed,21,21,0,21,0.0,,
+failures_empty_0px,21,21,21,21,0.0,,
+failures_small_11_100px,4,0,4,0,58.5,0.6922914111507725,
+failures_medium_101_1000px,15,0,0,0,452.0,0.687187146204648,
+failures_large_gt_1000px,45,0,0,0,4435.0,0.4794077793126597,

@@ -80,3 +80,5 @@ venv.bak/
 .vscode/
 *.swp
 .DS_Store
+
+results/**/*_per_case.csv

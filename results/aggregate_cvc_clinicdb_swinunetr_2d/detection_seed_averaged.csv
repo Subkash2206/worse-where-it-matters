@@ -1,0 +1,5 @@
+method,control,n_cases,n_videos,n_missed,missed_rate,ci_low,ci_high,unit,n,both_nonempty,nonempty_to_empty,empty_to_nonempty,both_empty,mcnemar_p,mcnemar_p_adjusted,transition_unit
+baseline,baseline,612,29,0,0.0,0.0,0.0,cluster_bootstrap_video,612,,,,,,,case
+tta2,baseline,612,29,0,0.0,0.0,0.0,cluster_bootstrap_video,612,612.0,0.0,0.0,0.0,1.0,1.0,case
+tta4,baseline,612,29,0,0.0,0.0,0.0,cluster_bootstrap_video,612,612.0,0.0,0.0,0.0,1.0,1.0,case
+tta8,baseline,612,29,0,0.0,0.0,0.0,cluster_bootstrap_video,612,612.0,0.0,0.0,0.0,1.0,1.0,case

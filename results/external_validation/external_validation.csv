@@ -1,0 +1,2 @@
+dataset,n_cases,image_ext,mask_ext,height_min,height_median,height_max,width_min,width_median,width_max,distinct_sizes,mask_values,threshold_used,rgb_distinct,n_empty_masks,lesion_px_median,lesion_px_min,lesion_px_max
+hyperkvasir_cecum,1009,.jpgx1009,,518,532,548,542,633,637,8x50,,,True,1009,0.0,0,0

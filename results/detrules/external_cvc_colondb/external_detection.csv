@@ -1,0 +1,5 @@
+scope,method,control,n_cases,n_videos,n_missed,missed_rate,ci_low,ci_high,unit,n,both_nonempty,nonempty_to_empty,empty_to_nonempty,both_empty,mcnemar_p,mcnemar_p_adjusted,transition_unit
+external,baseline,baseline,380,380,55,0.14473684210526316,0.11052631578947368,0.18157894736842106,cluster_bootstrap_video,380,,,,,,,case
+external,tta2,baseline,380,380,59,0.15526315789473685,0.11842105263157894,0.19210526315789472,cluster_bootstrap_video,380,318.0,7.0,3.0,52.0,0.34375,0.34375,case
+external,tta4,baseline,380,380,63,0.16578947368421051,0.12894736842105264,0.20526315789473684,cluster_bootstrap_video,380,313.0,12.0,4.0,51.0,0.076812744140625,0.15362548828125,case
+external,tta8,baseline,380,380,68,0.17894736842105263,0.14210526315789473,0.21842105263157896,cluster_bootstrap_video,380,310.0,15.0,2.0,53.0,0.002349853515625,0.007049560546875,case

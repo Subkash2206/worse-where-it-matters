@@ -1,0 +1,5 @@
+method,control,n_cases,n_videos,n_missed,missed_rate,ci_low,ci_high,unit,n,both_nonempty,nonempty_to_empty,empty_to_nonempty,both_empty,mcnemar_p,mcnemar_p_adjusted,transition_unit
+baseline,baseline,612,29,18,0.029411764705882353,0.0107193452004627,0.05673758865248227,cluster_bootstrap_video,612,,,,,,,case
+ensemble3,baseline,612,29,18,0.029411764705882353,0.0107193452004627,0.05673758865248227,cluster_bootstrap_video,612,594.0,0.0,0.0,18.0,1.0,1.0,case
+ensemble3_tta4,baseline,612,29,22,0.03594771241830065,0.013737339908304586,0.06630824372759857,cluster_bootstrap_video,612,588.0,6.0,2.0,16.0,0.2890625,0.8671875,case
+tta4,baseline,612,29,21,0.03431372549019608,0.013201320132013201,0.06343299155308599,cluster_bootstrap_video,612,588.0,6.0,3.0,15.0,0.5078125,1.0,case

@@ -1,0 +1,6 @@
+cohort,n,n_empty_prediction,n_near_empty_le_100px,n_entropy_roi_nan,median_area_px,median_entropy_roi,median_entropy_roi_empty_or_near
+all_cases,612,0,0,0,7363.5,0.4331496668464466,
+failures_all,232,0,0,0,5361.0,0.5019934360528281,
+failures_non_missed,232,0,0,0,5361.0,0.5019934360528281,
+failures_medium_101_1000px,10,0,0,0,479.5,0.5921306792400254,
+failures_large_gt_1000px,222,0,0,0,5552.5,0.49870383954600117,

@@ -1,0 +1,13 @@
+model,method,control,n_cases,n_videos,n_missed,missed_rate,ci_low,ci_high,unit,n,both_nonempty,nonempty_to_empty,empty_to_nonempty,both_empty,mcnemar_p,mcnemar_p_adjusted,transition_unit
+UNet,baseline,baseline,612,29,15,0.024509803921568627,0.008196051644701599,0.04912713120830242,cluster_bootstrap_video,612,,,,,,,case
+UNet,tta4,baseline,612,29,19,0.03104575163398693,0.009448818897637795,0.06206781914893611,cluster_bootstrap_video,612,591.0,6.0,2.0,13.0,0.2890625,0.578125,case
+UNet,tta8,baseline,612,29,19,0.03104575163398693,0.01083097292668468,0.061405491577043864,cluster_bootstrap_video,612,591.0,6.0,2.0,13.0,0.2890625,0.578125,case
+UNet,ensemble3,baseline,612,29,20,0.032679738562091505,0.0128,0.06133065841776501,cluster_bootstrap_video,612,592.0,5.0,0.0,15.0,0.0625,0.1875,case
+SwinUNETR,baseline,baseline,612,29,0,0.0,0.0,0.0,cluster_bootstrap_video,612,,,,,,,case
+SwinUNETR,tta4,baseline,612,29,0,0.0,0.0,0.0,cluster_bootstrap_video,612,612.0,0.0,0.0,0.0,1.0,1.0,case
+SwinUNETR,tta8,baseline,612,29,0,0.0,0.0,0.0,cluster_bootstrap_video,612,612.0,0.0,0.0,0.0,1.0,1.0,case
+SwinUNETR,ensemble3,baseline,612,29,0,0.0,0.0,0.0,cluster_bootstrap_video,612,612.0,0.0,0.0,0.0,1.0,1.0,case
+SegFormer,baseline,baseline,612,29,0,0.0,0.0,0.0,cluster_bootstrap_video,612,,,,,,,case
+SegFormer,tta4,baseline,612,29,0,0.0,0.0,0.0,cluster_bootstrap_video,612,612.0,0.0,0.0,0.0,1.0,1.0,case
+SegFormer,tta8,baseline,612,29,0,0.0,0.0,0.0,cluster_bootstrap_video,612,612.0,0.0,0.0,0.0,1.0,1.0,case
+SegFormer,ensemble3,baseline,612,29,0,0.0,0.0,0.0,cluster_bootstrap_video,612,612.0,0.0,0.0,0.0,1.0,1.0,case

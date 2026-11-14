@@ -1,0 +1,10 @@
+model,size_bin,control,treatment,unit,n_units,both_nonempty,new_misses,recovered,both_empty,net_change,mcnemar_p,mcnemar_p_adjusted,correction,cutoff_low_px,cutoff_high_px
+brats2021/segresnet_reduced,small,baseline,tta2,case,384,377,1,0,6,-1,1.0,1.0,holm across 9 bin x method tests,10349.333333333334,25728.0
+brats2021/segresnet_reduced,small,baseline,tta4,case,384,375,3,1,5,-2,0.625,1.0,holm across 9 bin x method tests,10349.333333333334,25728.0
+brats2021/segresnet_reduced,small,baseline,tta8,case,384,375,3,2,4,-1,1.0,1.0,holm across 9 bin x method tests,10349.333333333334,25728.0
+brats2021/segresnet_reduced,medium,baseline,tta2,case,417,416,1,0,0,-1,1.0,1.0,holm across 9 bin x method tests,10349.333333333334,25728.0
+brats2021/segresnet_reduced,medium,baseline,tta4,case,417,416,1,0,0,-1,1.0,1.0,holm across 9 bin x method tests,10349.333333333334,25728.0
+brats2021/segresnet_reduced,medium,baseline,tta8,case,417,417,0,0,0,0,1.0,1.0,holm across 9 bin x method tests,10349.333333333334,25728.0
+brats2021/segresnet_reduced,large,baseline,tta2,case,417,417,0,0,0,0,1.0,1.0,holm across 9 bin x method tests,10349.333333333334,25728.0
+brats2021/segresnet_reduced,large,baseline,tta4,case,417,417,0,0,0,0,1.0,1.0,holm across 9 bin x method tests,10349.333333333334,25728.0
+brats2021/segresnet_reduced,large,baseline,tta8,case,417,417,0,0,0,0,1.0,1.0,holm across 9 bin x method tests,10349.333333333334,25728.0

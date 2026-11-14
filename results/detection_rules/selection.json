@@ -1,0 +1,97 @@
+{
+  "reference": "tta8",
+  "reference_dice_mean": 0.8046399930163872,
+  "reference_cases_majority_missed": 19,
+  "max_dice_drop": 0.002,
+  "chosen_method": "tta8_lowdet_20",
+  "chosen_threshold": 0.2,
+  "chosen": {
+    "method": "tta8_lowdet_20",
+    "dice_mean": 0.8124437820550625,
+    "dice_drop_vs_reference": -0.007803789038675291,
+    "cases_majority_missed": 8,
+    "missed_checkpoints": 21
+  },
+  "eligible": [
+    {
+      "method": "tta8_lowdet_20",
+      "dice_mean": 0.8124437820550625,
+      "dice_drop_vs_reference": -0.007803789038675291,
+      "cases_majority_missed": 8,
+      "missed_checkpoints": 21
+    },
+    {
+      "method": "tta8_lowdet_30",
+      "dice_mean": 0.8085287716978867,
+      "dice_drop_vs_reference": -0.003888778681499505,
+      "cases_majority_missed": 14,
+      "missed_checkpoints": 39
+    },
+    {
+      "method": "tta8_lowdet_40",
+      "dice_mean": 0.8056561276467962,
+      "dice_drop_vs_reference": -0.0010161346304089491,
+      "cases_majority_missed": 17,
+      "missed_checkpoints": 57
+    }
+  ],
+  "rejected": [],
+  "rule": "minimise majority-missed cases among the lowdet candidates whose mean Dice is at most 0.002 below plain tta8; ties break on missed checkpoints",
+  "per_case_dir": "C:\\Users\\subka\\Documents\\melba-tta\\results\\cvc_clinicdb_unet_resnet50_detrules\\evaluation",
+  "n_per_case_files": 15,
+  "git_revision": "8bb15ee-dirty",
+  "table": [
+    {
+      "method": "tta8",
+      "n_checkpoints": 15,
+      "n_case_evaluations": 1836,
+      "n_cases": 612,
+      "seeds_per_case": 3.0,
+      "dice_mean": 0.8046399930163872,
+      "dice_median": 0.903020738892025,
+      "missed_checkpoints": 69,
+      "missed_checkpoint_rate_pct": 3.758169934640523,
+      "cases_missed_any": 36,
+      "cases_majority_missed": 19
+    },
+    {
+      "method": "tta8_lowdet_20",
+      "n_checkpoints": 15,
+      "n_case_evaluations": 1836,
+      "n_cases": 612,
+      "seeds_per_case": 3.0,
+      "dice_mean": 0.8124437820550625,
+      "dice_median": 0.903020738892025,
+      "missed_checkpoints": 21,
+      "missed_checkpoint_rate_pct": 1.1437908496732025,
+      "cases_missed_any": 13,
+      "cases_majority_missed": 8
+    },
+    {
+      "method": "tta8_lowdet_30",
+      "n_checkpoints": 15,
+      "n_case_evaluations": 1836,
+      "n_cases": 612,
+      "seeds_per_case": 3.0,
+      "dice_mean": 0.8085287716978867,
+      "dice_median": 0.903020738892025,
+      "missed_checkpoints": 39,
+      "missed_checkpoint_rate_pct": 2.1241830065359477,
+      "cases_missed_any": 23,
+      "cases_majority_missed": 14
+    },
+    {
+      "method": "tta8_lowdet_40",
+      "n_checkpoints": 15,
+      "n_case_evaluations": 1836,
+      "n_cases": 612,
+      "seeds_per_case": 3.0,
+      "dice_mean": 0.8056561276467962,
+      "dice_median": 0.903020738892025,
+      "missed_checkpoints": 57,
+      "missed_checkpoint_rate_pct": 3.104575163398693,
+      "cases_missed_any": 28,
+      "cases_majority_missed": 17
+    }
+  ]
+}

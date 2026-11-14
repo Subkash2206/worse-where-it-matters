@@ -1,0 +1,27 @@
+{
+  "dataset": "etis_larib",
+  "folds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "git_revision": "0486e2a",
+  "images_dir": "C:/Users/subka/Documents/datasets/polyp/TestDataset/ETIS-LaribPolypDB/images",
+  "internal_models": [
+    "unet_resnet50_detrules"
+  ],
+  "label": "ETIS-LaribPolypDB",
+  "limit": null,
+  "masks_dir": "C:/Users/subka/Documents/datasets/polyp/TestDataset/ETIS-LaribPolypDB/masks",
+  "n_bootstrap": 10000,
+  "n_checkpoints": 15,
+  "scope": "external",
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "unit": "group"
+}

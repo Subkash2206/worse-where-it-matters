@@ -1,0 +1,21 @@
+{
+  "finished_utc": "2026-11-11T18:49:48Z",
+  "fold": 2,
+  "methods": [
+    "baseline",
+    "tta2",
+    "tta4",
+    "tta8",
+    "tta4_anyview",
+    "tta4_lowdet_20",
+    "tta4_lowdet_30",
+    "tta4_lowdet_40",
+    "tta8_anyview",
+    "tta8_lowdet_20",
+    "tta8_lowdet_30",
+    "tta8_lowdet_40"
+  ],
+  "n_cases": 126,
+  "per_case_csv": "C:\\Users\\subka\\Documents\\melba-tta\\results\\cvc_clinicdb_unet_resnet50_detrules\\evaluation\\cvc_clinicdb_test_fold2_seed0_per_case.csv",
+  "seed": 0
+}

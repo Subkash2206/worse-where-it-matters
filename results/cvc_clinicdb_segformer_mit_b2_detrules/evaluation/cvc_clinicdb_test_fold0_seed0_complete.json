@@ -1,0 +1,21 @@
+{
+  "finished_utc": "2026-11-14T03:31:29Z",
+  "fold": 0,
+  "methods": [
+    "baseline",
+    "tta2",
+    "tta4",
+    "tta8",
+    "tta4_anyview",
+    "tta4_lowdet_20",
+    "tta4_lowdet_30",
+    "tta4_lowdet_40",
+    "tta8_anyview",
+    "tta8_lowdet_20",
+    "tta8_lowdet_30",
+    "tta8_lowdet_40"
+  ],
+  "n_cases": 118,
+  "per_case_csv": "C:\\Users\\subka\\Documents\\melba-tta\\results\\cvc_clinicdb_segformer_mit_b2_detrules\\evaluation\\cvc_clinicdb_test_fold0_seed0_per_case.csv",
+  "seed": 0
+}

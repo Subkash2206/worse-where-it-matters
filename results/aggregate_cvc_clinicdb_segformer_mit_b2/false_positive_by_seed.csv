@@ -1,0 +1,13 @@
+seed,method,control,n_cases,n_videos,n_false_positive,false_positive_rate,ci_low,ci_high,unit,n,both_correct,correct_to_fp,fp_to_correct,both_fp,mcnemar_p,mcnemar_p_adjusted,transition_unit,pred_volume_mm3_mean,pred_volume_mm3_median,pred_volume_mm3_max,pred_volume_mm3_total
+0,baseline,baseline,0,0,0,,0.0,0.0,cluster_bootstrap_group,0,,,,,,,case,,,,
+0,tta2,baseline,0,0,0,,0.0,0.0,cluster_bootstrap_group,0,0.0,0.0,0.0,0.0,1.0,1.0,case,,,,
+0,tta4,baseline,0,0,0,,0.0,0.0,cluster_bootstrap_group,0,0.0,0.0,0.0,0.0,1.0,1.0,case,,,,
+0,tta8,baseline,0,0,0,,0.0,0.0,cluster_bootstrap_group,0,0.0,0.0,0.0,0.0,1.0,1.0,case,,,,
+1,baseline,baseline,0,0,0,,0.0,0.0,cluster_bootstrap_group,0,,,,,,,case,,,,
+1,tta2,baseline,0,0,0,,0.0,0.0,cluster_bootstrap_group,0,0.0,0.0,0.0,0.0,1.0,1.0,case,,,,
+1,tta4,baseline,0,0,0,,0.0,0.0,cluster_bootstrap_group,0,0.0,0.0,0.0,0.0,1.0,1.0,case,,,,
+1,tta8,baseline,0,0,0,,0.0,0.0,cluster_bootstrap_group,0,0.0,0.0,0.0,0.0,1.0,1.0,case,,,,
+2,baseline,baseline,0,0,0,,0.0,0.0,cluster_bootstrap_group,0,,,,,,,case,,,,
+2,tta2,baseline,0,0,0,,0.0,0.0,cluster_bootstrap_group,0,0.0,0.0,0.0,0.0,1.0,1.0,case,,,,
+2,tta4,baseline,0,0,0,,0.0,0.0,cluster_bootstrap_group,0,0.0,0.0,0.0,0.0,1.0,1.0,case,,,,
+2,tta8,baseline,0,0,0,,0.0,0.0,cluster_bootstrap_group,0,0.0,0.0,0.0,0.0,1.0,1.0,case,,,,

@@ -1,0 +1,40 @@
+{
+  "dataset": "cvc_colondb",
+  "folds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "git_revision": "c7552d1",
+  "images_dir": "C:/Users/subka/Documents/datasets/polyp/TestDataset/CVC-ColonDB/images",
+  "internal_models": [
+    "segformer_mit_b2_detrules"
+  ],
+  "label": "CVC-ColonDB",
+  "limit": null,
+  "masks_dir": "C:/Users/subka/Documents/datasets/polyp/TestDataset/CVC-ColonDB/masks",
+  "metrics": [
+    "dice",
+    "jaccard",
+    "precision",
+    "recall",
+    "hd",
+    "hd95",
+    "hd95_pooled",
+    "assd",
+    "boundary_f1",
+    "pred_volume_mm3"
+  ],
+  "n_bootstrap": 10000,
+  "n_checkpoints": 15,
+  "references": "mask",
+  "scope": "external",
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "unit": "group"
+}

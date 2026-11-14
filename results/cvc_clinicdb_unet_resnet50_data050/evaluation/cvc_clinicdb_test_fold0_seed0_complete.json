@@ -1,0 +1,13 @@
+{
+  "finished_utc": "2026-11-01T20:10:45Z",
+  "fold": 0,
+  "methods": [
+    "baseline",
+    "tta2",
+    "tta4",
+    "tta8"
+  ],
+  "n_cases": 118,
+  "per_case_csv": "C:\\Users\\subka\\Documents\\melba-tta\\results\\cvc_clinicdb_unet_resnet50_data050\\evaluation\\cvc_clinicdb_test_fold0_seed0_per_case.csv",
+  "seed": 0
+}

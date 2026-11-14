@@ -1,0 +1,9 @@
+model,subgroup,method,control,n_cases,n_videos,n_false_positive,false_positive_rate,ci_low,ci_high,unit,n,both_correct,correct_to_fp,fp_to_correct,both_fp,mcnemar_p,mcnemar_p_adjusted,transition_unit,pred_volume_mm3_mean,pred_volume_mm3_median,pred_volume_mm3_max,pred_volume_mm3_total,cutoff_low_px,cutoff_high_px
+cvc_clinicdb/unet_resnet50,empty_reference,baseline,baseline,0,0,0,,0.0,0.0,cluster_bootstrap_group,0,,,,,,,group,,,,,4923.666666666668,11247.333333333338
+cvc_clinicdb/unet_resnet50,empty_reference,tta2,baseline,0,0,0,,0.0,0.0,cluster_bootstrap_group,0,0.0,0.0,0.0,0.0,1.0,1.0,group,,,,,4923.666666666668,11247.333333333338
+cvc_clinicdb/unet_resnet50,empty_reference,tta4,baseline,0,0,0,,0.0,0.0,cluster_bootstrap_group,0,0.0,0.0,0.0,0.0,1.0,1.0,group,,,,,4923.666666666668,11247.333333333338
+cvc_clinicdb/unet_resnet50,empty_reference,tta8,baseline,0,0,0,,0.0,0.0,cluster_bootstrap_group,0,0.0,0.0,0.0,0.0,1.0,1.0,group,,,,,4923.666666666668,11247.333333333338
+cvc_clinicdb/swinunetr_2d,empty_reference,baseline,baseline,0,0,0,,0.0,0.0,cluster_bootstrap_group,0,,,,,,,group,,,,,4923.666666666668,11247.333333333338
+cvc_clinicdb/swinunetr_2d,empty_reference,tta2,baseline,0,0,0,,0.0,0.0,cluster_bootstrap_group,0,0.0,0.0,0.0,0.0,1.0,1.0,group,,,,,4923.666666666668,11247.333333333338
+cvc_clinicdb/swinunetr_2d,empty_reference,tta4,baseline,0,0,0,,0.0,0.0,cluster_bootstrap_group,0,0.0,0.0,0.0,0.0,1.0,1.0,group,,,,,4923.666666666668,11247.333333333338
+cvc_clinicdb/swinunetr_2d,empty_reference,tta8,baseline,0,0,0,,0.0,0.0,cluster_bootstrap_group,0,0.0,0.0,0.0,0.0,1.0,1.0,group,,,,,4923.666666666668,11247.333333333338

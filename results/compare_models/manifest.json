@@ -1,0 +1,29 @@
+{
+  "configs": [
+    "C:\\Users\\subka\\Documents\\melba-tta\\configs\\cvc_clinicdb\\unet_resnet50.yaml",
+    "C:\\Users\\subka\\Documents\\melba-tta\\configs\\cvc_clinicdb\\swinunetr_2d.yaml",
+    "C:\\Users\\subka\\Documents\\melba-tta\\configs\\cvc_clinicdb\\segformer_mit_b2.yaml"
+  ],
+  "control": "baseline",
+  "folds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "git_revision": "0486e2a",
+  "labels": [
+    "UNet",
+    "SwinUNETR",
+    "SegFormer"
+  ],
+  "n_bootstrap": 2000,
+  "n_permutations": 10000,
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "treatment": "tta4"
+}

@@ -1,0 +1,13 @@
+method,n_units,checkpoints,missed_checkpoints,missed_checkpoint_rate_pct,units_missed_any,units_majority_missed,majority_miss_rate_pct,new_vs_reference,left_vs_reference,mcnemar_p_vs_reference,reference
+baseline,1000,15,20,0.13333333333333333,13,0,0.0,0.0,0.0,1.0,tta8
+tta2,1000,15,11,0.07333333333333333,7,0,0.0,0.0,0.0,1.0,tta8
+tta4,1000,15,10,0.06666666666666667,8,0,0.0,0.0,0.0,1.0,tta8
+tta4_anyview,1000,15,0,0.0,0,0,0.0,0.0,0.0,1.0,tta8
+tta4_lowdet_20,1000,15,1,0.006666666666666667,1,0,0.0,0.0,0.0,1.0,tta8
+tta4_lowdet_30,1000,15,4,0.02666666666666667,2,0,0.0,0.0,0.0,1.0,tta8
+tta4_lowdet_40,1000,15,5,0.03333333333333333,3,0,0.0,0.0,0.0,1.0,tta8
+tta8,1000,15,19,0.12666666666666665,13,0,0.0,,,,tta8
+tta8_anyview,1000,15,0,0.0,0,0,0.0,0.0,0.0,1.0,tta8
+tta8_lowdet_20,1000,15,1,0.006666666666666667,1,0,0.0,0.0,0.0,1.0,tta8
+tta8_lowdet_30,1000,15,4,0.02666666666666667,3,0,0.0,0.0,0.0,1.0,tta8
+tta8_lowdet_40,1000,15,11,0.07333333333333333,9,0,0.0,0.0,0.0,1.0,tta8

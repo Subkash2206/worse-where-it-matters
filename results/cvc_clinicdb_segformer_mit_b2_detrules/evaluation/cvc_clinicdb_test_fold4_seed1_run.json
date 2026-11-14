@@ -1,0 +1,745 @@
+{
+  "activation": "sigmoid",
+  "cases_evaluated": 102,
+  "cases_in_split": 102,
+  "checkpoint": {
+    "metadata": {
+      "best_value": 0.8209849958450107,
+      "config_hash": "ce652ec932a41289",
+      "config_path": "C:\\Users\\subka\\Documents\\melba-tta\\configs\\cvc_clinicdb\\segformer_mit_b2.yaml",
+      "epoch": 20,
+      "fold": 4,
+      "monitor": "val_dice",
+      "seed": 1,
+      "torch_version": "2.6.0+cu124",
+      "val_dice": 0.8209849958450107,
+      "val_loss": 0.17639888268185117
+    },
+    "path": "C:\\Users\\subka\\Documents\\melba-tta\\checkpoints\\cvc_clinicdb_segformer_mit_b2\\fold4_seed1\\best.pt",
+    "sha256": "755eb012210c9fd39be617477e8dec8fe6fdbc9f101432973ff3a2f598c34c67"
+  },
+  "config": {
+    "dataset": {
+      "augmentation": {
+        "brightness": 0.15,
+        "contrast": 0.15,
+        "hflip_p": 0.5,
+        "rot90_p": 0.5,
+        "vflip_p": 0.5
+      },
+      "image_extension": ".tif",
+      "image_size": [
+        352,
+        352
+      ],
+      "images_dir": "cvc_clinicdb/original",
+      "in_channels": 3,
+      "mask_threshold": 127,
+      "masks_dir": "cvc_clinicdb/ground_truth",
+      "name": "cvc_clinicdb",
+      "normalization": {
+        "kind": "imagenet",
+        "mean": null,
+        "stats_file": "data/splits/cvc_clinicdb_norm_stats.json",
+        "std": null
+      },
+      "num_classes": 1,
+      "root": "cvc_clinicdb",
+      "spacing_mm": [
+        1.0,
+        1.0
+      ],
+      "split": {
+        "block_size": 20,
+        "fold": 4,
+        "frame_column": "case_id",
+        "group_column": "group_id",
+        "group_map_file": "data/splits/cvc_clinicdb_frame_groups.csv",
+        "n_folds": 5,
+        "output_pattern": "data/splits/cvc_clinicdb_fold{fold}.csv",
+        "seed": 2024,
+        "sequence_end_frames": [
+          25,
+          50,
+          67,
+          78,
+          103,
+          126,
+          151,
+          177,
+          199,
+          205,
+          227,
+          252,
+          277,
+          297,
+          317,
+          342,
+          363,
+          383,
+          408,
+          428,
+          447,
+          466,
+          478,
+          503,
+          528,
+          546,
+          571,
+          591,
+          612
+        ],
+        "strategy": "group_map"
+      }
+    },
+    "deterministic": true,
+    "device": "auto",
+    "evaluation": {
+      "allow_selection_split": false,
+      "emit_penalized_metrics": true,
+      "fold": 4,
+      "output_dir": "results/cvc_clinicdb_segformer_mit_b2_detrules/evaluation",
+      "probability_map_dir": null,
+      "probability_map_methods": [],
+      "save_probability_maps": false,
+      "save_variance_maps": false,
+      "split": "test",
+      "timing": "auto",
+      "uncertainty_boundary_band_px": 3,
+      "warmup_runs": 3,
+      "write_summary": true
+    },
+    "experiment": {
+      "description": "SegFormer CVC-ClinicDB: TTA with detection-safe decision rules (no retraining)",
+      "name": "cvc_clinicdb_segformer_mit_b2_detrules"
+    },
+    "inference": {
+      "activation": "sigmoid",
+      "amp": true,
+      "batch_size": 1,
+      "threshold": 0.5
+    },
+    "metrics": {
+      "boundary_tolerance_mm": 2.0,
+      "connectivity": 1,
+      "empty_policy": "nan",
+      "hd_percentile": 95.0,
+      "names": [
+        "dice",
+        "jaccard",
+        "precision",
+        "recall",
+        "hd",
+        "hd95",
+        "hd95_pooled",
+        "assd",
+        "boundary_f1",
+        "entropy_mean",
+        "variance_mean",
+        "entropy_mean_roi",
+        "variance_mean_roi",
+        "view_disagreement",
+        "per_view_dice_mean",
+        "per_view_dice_std",
+        "view_pairwise_dice"
+      ]
+    },
+    "model": {
+      "architecture": "smp_segformer",
+      "checkpoint": "checkpoints/cvc_clinicdb_segformer_mit_b2/fold{fold}_seed{seed}/best.pt",
+      "dropout_p": 0.0,
+      "encoder": "mit_b2",
+      "encoder_weights": "imagenet",
+      "in_channels": 3,
+      "num_classes": 1,
+      "selection_split": "val"
+    },
+    "paths": {
+      "checkpoints": "checkpoints",
+      "logs": "logs",
+      "results": "results",
+      "root": "auto",
+      "splits": "data/splits"
+    },
+    "runtime": {
+      "num_workers": 4,
+      "pin_memory": true,
+      "progress": true
+    },
+    "seed": 1,
+    "stats": {
+      "alternative": "two-sided",
+      "bootstrap_seed": 0,
+      "ci": 0.95,
+      "correction": "holm",
+      "n_bootstrap": 10000,
+      "output_dir": "results/cvc_clinicdb_segformer_mit_b2_detrules/stats",
+      "primary_test": "wilcoxon",
+      "secondary_test": "t_test_rel",
+      "unit": "group"
+    },
+    "training": {
+      "amp": true,
+      "batch_size": 8,
+      "checkpoint_dir": "checkpoints/cvc_clinicdb_segformer_mit_b2",
+      "checkpoint_name": "best.pt",
+      "data_fraction": 1.0,
+      "early_stopping_patience": 20,
+      "epochs": 100,
+      "learning_rate": 0.0001,
+      "loss": "bce_dice",
+      "monitor": "val_dice",
+      "scheduler": "cosine",
+      "train_aug": "geometric_d4",
+      "weight_decay": 0.0
+    },
+    "tta": {
+      "aggregator": "mean",
+      "methods": [
+        {
+          "name": "baseline",
+          "views": [
+            {
+              "name": "identity",
+              "ops": []
+            }
+          ]
+        },
+        {
+          "name": "tta2",
+          "views": [
+            {
+              "name": "identity",
+              "ops": []
+            },
+            {
+              "name": "hflip",
+              "ops": [
+                {
+                  "axes": [
+                    "w"
+                  ],
+                  "type": "flip"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "tta4",
+          "views": [
+            {
+              "name": "identity",
+              "ops": []
+            },
+            {
+              "name": "rot180",
+              "ops": [
+                {
+                  "axes": [
+                    "h",
+                    "w"
+                  ],
+                  "k": 2,
+                  "type": "rot90"
+                }
+              ]
+            },
+            {
+              "name": "hflip",
+              "ops": [
+                {
+                  "axes": [
+                    "w"
+                  ],
+                  "type": "flip"
+                }
+              ]
+            },
+            {
+              "name": "vflip",
+              "ops": [
+                {
+                  "axes": [
+                    "h"
+                  ],
+                  "type": "flip"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "tta8",
+          "views": [
+            {
+              "name": "identity",
+              "ops": []
+            },
+            {
+              "name": "rot90",
+              "ops": [
+                {
+                  "axes": [
+                    "h",
+                    "w"
+                  ],
+                  "k": 1,
+                  "type": "rot90"
+                }
+              ]
+            },
+            {
+              "name": "rot180",
+              "ops": [
+                {
+                  "axes": [
+                    "h",
+                    "w"
+                  ],
+                  "k": 2,
+                  "type": "rot90"
+                }
+              ]
+            },
+            {
+              "name": "rot270",
+              "ops": [
+                {
+                  "axes": [
+                    "h",
+                    "w"
+                  ],
+                  "k": 3,
+                  "type": "rot90"
+                }
+              ]
+            },
+            {
+              "name": "hflip",
+              "ops": [
+                {
+                  "axes": [
+                    "w"
+                  ],
+                  "type": "flip"
+                }
+              ]
+            },
+            {
+              "name": "hflip_rot90",
+              "ops": [
+                {
+                  "axes": [
+                    "w"
+                  ],
+                  "type": "flip"
+                },
+                {
+                  "axes": [
+                    "h",
+                    "w"
+                  ],
+                  "k": 1,
+                  "type": "rot90"
+                }
+              ]
+            },
+            {
+              "name": "hflip_rot180",
+              "ops": [
+                {
+                  "axes": [
+                    "w"
+                  ],
+                  "type": "flip"
+                },
+                {
+                  "axes": [
+                    "h",
+                    "w"
+                  ],
+                  "k": 2,
+                  "type": "rot90"
+                }
+              ]
+            },
+            {
+              "name": "hflip_rot270",
+              "ops": [
+                {
+                  "axes": [
+                    "w"
+                  ],
+                  "type": "flip"
+                },
+                {
+                  "axes": [
+                    "h",
+                    "w"
+                  ],
+                  "k": 3,
+                  "type": "rot90"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "derived_from": "tta4",
+          "name": "tta4_anyview",
+          "rule": "anyview"
+        },
+        {
+          "derived_from": "tta4",
+          "name": "tta4_lowdet_20",
+          "rule": "lowdet_20"
+        },
+        {
+          "derived_from": "tta4",
+          "name": "tta4_lowdet_30",
+          "rule": "lowdet_30"
+        },
+        {
+          "derived_from": "tta4",
+          "name": "tta4_lowdet_40",
+          "rule": "lowdet_40"
+        },
+        {
+          "derived_from": "tta8",
+          "name": "tta8_anyview",
+          "rule": "anyview"
+        },
+        {
+          "derived_from": "tta8",
+          "name": "tta8_lowdet_20",
+          "rule": "lowdet_20"
+        },
+        {
+          "derived_from": "tta8",
+          "name": "tta8_lowdet_30",
+          "rule": "lowdet_30"
+        },
+        {
+          "derived_from": "tta8",
+          "name": "tta8_lowdet_40",
+          "rule": "lowdet_40"
+        }
+      ]
+    }
+  },
+  "config_hash": "d90942c63239cd33",
+  "config_path": "C:\\Users\\subka\\Documents\\melba-tta\\configs\\cvc_clinicdb\\segformer_mit_b2_detrules.yaml",
+  "created_utc": "2026-11-14T03:48:34Z",
+  "device": {
+    "capability": "8.9",
+    "device": "cuda",
+    "name": "NVIDIA GeForce RTX 4050 Laptop GPU",
+    "total_memory_gb": 6.0,
+    "type": "cuda"
+  },
+  "empty_flag_counts": {
+    "baseline": {
+      "both_nonempty": 102
+    },
+    "tta2": {
+      "both_nonempty": 102
+    },
+    "tta4": {
+      "both_nonempty": 102
+    },
+    "tta4_anyview": {
+      "both_nonempty": 102
+    },
+    "tta4_lowdet_20": {
+      "both_nonempty": 102
+    },
+    "tta4_lowdet_30": {
+      "both_nonempty": 102
+    },
+    "tta4_lowdet_40": {
+      "both_nonempty": 102
+    },
+    "tta8": {
+      "both_nonempty": 102
+    },
+    "tta8_anyview": {
+      "both_nonempty": 102
+    },
+    "tta8_lowdet_20": {
+      "both_nonempty": 102
+    },
+    "tta8_lowdet_30": {
+      "both_nonempty": 102
+    },
+    "tta8_lowdet_40": {
+      "both_nonempty": 102
+    }
+  },
+  "environment": {
+    "cuda_available": true,
+    "cudnn_version": 90100,
+    "deterministic_algorithms": true,
+    "gpu": "NVIDIA GeForce RTX 4050 Laptop GPU",
+    "gpu_total_memory_gb": 6.0,
+    "monai": "1.5.2",
+    "numpy": "2.4.1",
+    "pandas": "3.0.1",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.13.7",
+    "scipy": "1.17.0",
+    "segmentation_models_pytorch": "0.5.0",
+    "torch": "2.6.0+cu124"
+  },
+  "fold": 4,
+  "git_revision": "c7552d1",
+  "groups_evaluated": 5,
+  "methods": [
+    {
+      "aggregator": "mean",
+      "derived_from": null,
+      "n_views": 1,
+      "name": "baseline",
+      "rule": null,
+      "stochastic": false,
+      "views": [
+        "identity"
+      ]
+    },
+    {
+      "aggregator": "mean",
+      "derived_from": null,
+      "n_views": 2,
+      "name": "tta2",
+      "rule": null,
+      "stochastic": false,
+      "views": [
+        "identity",
+        "hflip"
+      ]
+    },
+    {
+      "aggregator": "mean",
+      "derived_from": null,
+      "n_views": 4,
+      "name": "tta4",
+      "rule": null,
+      "stochastic": false,
+      "views": [
+        "identity",
+        "rot180",
+        "hflip",
+        "vflip"
+      ]
+    },
+    {
+      "aggregator": "mean",
+      "derived_from": null,
+      "n_views": 8,
+      "name": "tta8",
+      "rule": null,
+      "stochastic": false,
+      "views": [
+        "identity",
+        "rot90",
+        "rot180",
+        "rot270",
+        "hflip",
+        "hflip_rot90",
+        "hflip_rot180",
+        "hflip_rot270"
+      ]
+    },
+    {
+      "aggregator": "mean",
+      "derived_from": "tta4",
+      "n_views": 4,
+      "name": "tta4_anyview",
+      "rule": "anyview",
+      "stochastic": false,
+      "views": [
+        "identity",
+        "rot180",
+        "hflip",
+        "vflip"
+      ]
+    },
+    {
+      "aggregator": "mean",
+      "derived_from": "tta4",
+      "n_views": 4,
+      "name": "tta4_lowdet_20",
+      "rule": "lowdet_20",
+      "stochastic": false,
+      "views": [
+        "identity",
+        "rot180",
+        "hflip",
+        "vflip"
+      ]
+    },
+    {
+      "aggregator": "mean",
+      "derived_from": "tta4",
+      "n_views": 4,
+      "name": "tta4_lowdet_30",
+      "rule": "lowdet_30",
+      "stochastic": false,
+      "views": [
+        "identity",
+        "rot180",
+        "hflip",
+        "vflip"
+      ]
+    },
+    {
+      "aggregator": "mean",
+      "derived_from": "tta4",
+      "n_views": 4,
+      "name": "tta4_lowdet_40",
+      "rule": "lowdet_40",
+      "stochastic": false,
+      "views": [
+        "identity",
+        "rot180",
+        "hflip",
+        "vflip"
+      ]
+    },
+    {
+      "aggregator": "mean",
+      "derived_from": "tta8",
+      "n_views": 8,
+      "name": "tta8_anyview",
+      "rule": "anyview",
+      "stochastic": false,
+      "views": [
+        "identity",
+        "rot90",
+        "rot180",
+        "rot270",
+        "hflip",
+        "hflip_rot90",
+        "hflip_rot180",
+        "hflip_rot270"
+      ]
+    },
+    {
+      "aggregator": "mean",
+      "derived_from": "tta8",
+      "n_views": 8,
+      "name": "tta8_lowdet_20",
+      "rule": "lowdet_20",
+      "stochastic": false,
+      "views": [
+        "identity",
+        "rot90",
+        "rot180",
+        "rot270",
+        "hflip",
+        "hflip_rot90",
+        "hflip_rot180",
+        "hflip_rot270"
+      ]
+    },
+    {
+      "aggregator": "mean",
+      "derived_from": "tta8",
+      "n_views": 8,
+      "name": "tta8_lowdet_30",
+      "rule": "lowdet_30",
+      "stochastic": false,
+      "views": [
+        "identity",
+        "rot90",
+        "rot180",
+        "rot270",
+        "hflip",
+        "hflip_rot90",
+        "hflip_rot180",
+        "hflip_rot270"
+      ]
+    },
+    {
+      "aggregator": "mean",
+      "derived_from": "tta8",
+      "n_views": 8,
+      "name": "tta8_lowdet_40",
+      "rule": "lowdet_40",
+      "stochastic": false,
+      "views": [
+        "identity",
+        "rot90",
+        "rot180",
+        "rot270",
+        "hflip",
+        "hflip_rot90",
+        "hflip_rot180",
+        "hflip_rot270"
+      ]
+    }
+  ],
+  "metrics": {
+    "boundary_tolerance_mm": 2.0,
+    "connectivity": 1,
+    "empty_policy": "nan",
+    "hd_percentile": 95.0,
+    "names": [
+      "dice",
+      "jaccard",
+      "precision",
+      "recall",
+      "hd",
+      "hd95",
+      "hd95_pooled",
+      "assd",
+      "boundary_f1",
+      "entropy_mean",
+      "variance_mean",
+      "entropy_mean_roi",
+      "variance_mean_roi",
+      "view_disagreement",
+      "per_view_dice_mean",
+      "per_view_dice_std",
+      "view_pairwise_dice"
+    ],
+    "score_empty_reference": true
+  },
+  "normalization": {
+    "kind": "imagenet",
+    "mean": null,
+    "stats_file": "data/splits/cvc_clinicdb_norm_stats.json",
+    "std": null
+  },
+  "outputs": {
+    "per_case_csv": "C:\\Users\\subka\\Documents\\melba-tta\\results\\cvc_clinicdb_segformer_mit_b2_detrules\\evaluation\\cvc_clinicdb_test_fold4_seed1_per_case.csv",
+    "summary_csv": "C:\\Users\\subka\\Documents\\melba-tta\\results\\cvc_clinicdb_segformer_mit_b2_detrules\\evaluation\\cvc_clinicdb_test_fold4_seed1_summary.csv"
+  },
+  "penalized_metrics": {
+    "emitted": true,
+    "source_metrics": [
+      "hd",
+      "hd95",
+      "hd95_pooled",
+      "assd"
+    ]
+  },
+  "probability_maps": {
+    "dir": null,
+    "dtype": null,
+    "methods": [],
+    "saved": false
+  },
+  "rows_written": 25704,
+  "run_id": "cvc_clinicdb_segformer_mit_b2_detrules-d90942c63239cd33-seed1",
+  "seed": 1,
+  "selection_split": "val",
+  "split": "test",
+  "threshold": 0.5,
+  "timing": {
+    "cuda_synchronize": true,
+    "enabled": false,
+    "metrics": [],
+    "warmup_runs": 0
+  }
+}
