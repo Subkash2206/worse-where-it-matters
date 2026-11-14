@@ -1,0 +1,4 @@
+predictor,compared_with,failure_definition,delta_auroc,ci_low,ci_high,p_value,n_used
+t4_entropy_mean_roi,b_entropy_mean_roi,non_missed_failures,0.03176559666144285,0.010424139659577333,0.055203198958183375,0.01,1208
+t4_entropy_mean_roi,t4_variance_mean_roi,non_missed_failures,-0.057773943054357124,-0.09647785744760785,-0.02462902245268695,0.0,1209
+t4_entropy_mean_roi,t4_view_disagreement,non_missed_failures,0.5378429680759276,0.44658344199825467,0.6228991120820823,0.0,1209
