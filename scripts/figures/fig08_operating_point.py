@@ -90,7 +90,7 @@ LABEL_OFFSETS = {
     ("segformer", "baseline"): (8, 14, "left"),
     ("segformer", "tta4"): (-8, 6, "right"),
     ("segformer", "tta8"): (-8, -6, "right"),
-    ("segformer", "tta8_anyview"): (-8, -18, "right"),
+    ("segformer", "tta8_anyview"): (0, -22, "center"),
     ("segformer", "tta8_lowdet_20"): (0, 12, "center"),
     ("segformer", "tta8_lowdet_30"): (0, -12, "center"),
     ("segformer", "tta8_lowdet_40"): (0, 18, "center"),
