@@ -358,7 +358,7 @@ def main() -> int:
     ax.set_xlabel("domain gap: baseline Dice below its own internal baseline  [%]")
     ax.set_ylabel("absolute TTA-8 Dice gain")
     ax.set_title(
-        "Under shift the TTA-8 gain holds for UNet and SegFormer and collapses for SwinUNETR",
+        "Under shift, the TTA gain holds or grows for UNet and SegFormer and shrinks for SwinUNETR",
         fontsize=7.0,
     )
     if len(families) > 1:

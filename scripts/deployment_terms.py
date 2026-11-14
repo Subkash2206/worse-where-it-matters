@@ -13,12 +13,14 @@ benefit and the price sit in one row:
   (``false_positive_seed_averaged.csv``, ``n_false_positive``), and the net fp -> correct minus
   correct -> fp count TTA moves;
 * **absolute latency** - forward passes per image/volume (baseline 1, TTA-4 4, TTA-8 8) times the
-  measured latency per pass.  The per-run JSON records that timing exists but not the values (they
-  went to the console), so the two measured constants of this project are used: 45 ms per pass for
-  the 2-D polyp models at 352x352 and 1750 ms per pass for the 3-D SegResNet at 128^3.  Latency is
-  reported **in ms per frame for the 2-D models and in s per volume for BraTS**, and the
-  ``latency_is_estimated`` column states that it is an estimate (the per-pass constant times the
-  number of passes), not a measured end-to-end wall clock.
+  **measured per-pass latency of that model**.  Each 2-D architecture has its own cost, so the value
+  is read from ``results/deployment_terms/pass_latency.csv`` (written by
+  ``scripts/measure_pass_latency.py``: one real 352x352 frame, warm-up, then the median of 50 timed
+  passes) instead of borrowing one constant for all of them; only the 3-D SegResNet still uses its
+  earlier measured constant of 1750 ms per pass at 128^3.  Latency is reported **in ms per frame
+  for the 2-D models and in s per volume for BraTS**, and the ``latency_is_estimated`` column states
+  that it is an estimate (the per-pass constant times the number of passes), not a measured
+  end-to-end wall clock.
 
 Usage
 -----
@@ -40,15 +42,80 @@ import pandas as pd  # noqa: E402
 
 RESULTS = _REPO_ROOT / "results"
 OUTPUT = RESULTS / "deployment_terms"
-LATENCY_MS_PER_PASS = {"2d": 45.0, "3d": 1750.0}
+#: 3-D per-pass constant, measured earlier on this machine (BraTS SegResNet at 128^3)
+LATENCY_MS_PER_PASS_3D = 1750.0
+#: used only if results/deployment_terms/pass_latency.csv is missing (a loud warning says so)
+LATENCY_FALLBACK_2D_MS = 45.0
+PASS_LATENCY_CSV = OUTPUT / "pass_latency.csv"
 EXTRA_PASSES = {"tta4": 3, "tta8": 7}  # the identity view is the baseline pass
+MODEL_TEXT = {
+    "unet_resnet50": "UNet",
+    "segformer_mit_b2": "SegFormer",
+    "swinunetr_2d": "SwinUNETR",
+    "segresnet": "SegResNet",
+}
 
 
 def _read(path: Path) -> pd.DataFrame:
     return pd.read_csv(path) if path.is_file() else pd.DataFrame()
 
 
-def _tail_rows(directory: Path, key: str, kind: str, model: str) -> list[dict[str, Any]]:
+def _measured_latency() -> dict[str, dict[str, Any]]:
+    """Per-model 2-D per-pass latency written by ``scripts/measure_pass_latency.py``."""
+    if not PASS_LATENCY_CSV.is_file():
+        return {}
+    table = pd.read_csv(PASS_LATENCY_CSV)
+    return {
+        str(row["model"]): {
+            "median_ms": float(row["median_ms_per_pass"]),
+            "timed_passes": int(row["timed_passes"]),
+            "warmup_passes": int(row["warmup_passes"]),
+            "blocks": int(row.get("blocks", 1)),
+            "device": str(row["device"]),
+            "device_name": str(row["device_name"]),
+        }
+        for _, row in table.iterrows()
+    }
+
+
+def _pass_latency(
+    model: str, kind: str, measured: dict[str, dict[str, Any]]
+) -> tuple[float, str]:
+    """Milliseconds per forward pass, and the sentence that documents where the value comes from.
+
+    The 2-D value is the **model's own** measurement (each architecture has a different
+    per-pass cost, so borrowing the UNet constant for SegFormer/SwinUNETR would be wrong);
+    only the 3-D SegResNet still uses its earlier measured constant.
+    """
+    if kind == "3d":
+        return LATENCY_MS_PER_PASS_3D, (
+            f"{LATENCY_MS_PER_PASS_3D:.0f} ms per pass (3-D SegResNet 128^3, measured earlier)"
+        )
+    if model in measured:
+        entry = measured[model]
+        return entry["median_ms"], (
+            f"{entry['median_ms']:.1f} ms per pass (2-D, 352x352, {MODEL_TEXT.get(model, model)}; "
+            f"measured: {entry['warmup_passes']} warm-up + median of {entry['timed_passes']} "
+            f"passes x {entry['blocks']} blocks on {entry['device_name']})"
+        )
+    print(
+        f"WARNING: no measured latency for {model} in {PASS_LATENCY_CSV}; falling back to "
+        f"{LATENCY_FALLBACK_2D_MS:.0f} ms per pass (run scripts/measure_pass_latency.py)",
+        file=sys.stderr,
+    )
+    return LATENCY_FALLBACK_2D_MS, (
+        f"{LATENCY_FALLBACK_2D_MS:.0f} ms per pass (2-D, 352x352, legacy constant, "
+        "not measured on this machine)"
+    )
+
+
+def _tail_rows(
+    directory: Path,
+    key: str,
+    kind: str,
+    model: str,
+    measured: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
     """Large-boundary failures fixed, misses added and the lesion-free false positives.
 
     The baseline row is the reference of the table: zero extra passes, no transition, no failure
@@ -89,7 +156,7 @@ def _tail_rows(directory: Path, key: str, kind: str, model: str) -> list[dict[st
             if not np.isfinite(lesion_free) or lesion_free <= 0:
                 # this collection has no empty reference at all: the column does not apply
                 lesion_free = false_positives = false_positives_removed = np.nan
-        pass_ms = LATENCY_MS_PER_PASS[kind]
+        pass_ms, latency_source = _pass_latency(model, kind, measured)
         passes = 1 + EXTRA_PASSES.get(method, 0)
         latency_ms = passes * pass_ms
         rows.append(
@@ -106,15 +173,14 @@ def _tail_rows(directory: Path, key: str, kind: str, model: str) -> list[dict[st
                 "forward_passes": passes,
                 "latency_ms_per_frame": latency_ms if kind == "2d" else np.nan,
                 "latency_s_per_volume": latency_ms / 1000.0 if kind == "3d" else np.nan,
-                "latency_source": f"{pass_ms:.0f} ms per pass "
-                + ("(3-D SegResNet 128^3)" if kind == "3d" else "(2-D, 352x352)"),
+                "latency_source": latency_source,
                 "latency_is_estimated": True,
             }
         )
     return rows
 
 
-def _external_rows() -> list[dict[str, Any]]:
+def _external_rows(measured: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     """Same terms for the external collections, from results/external_by_model."""
     output = RESULTS / "external_by_model"
     misses = _read(output / "misses.csv")
@@ -144,6 +210,8 @@ def _external_rows() -> list[dict[str, Any]]:
             # results/external_by_model.  None of these collections has empty references either,
             # so the false-positive columns stay empty.
             fixed = 0.0 if method == "baseline" else np.nan
+            pass_ms, latency_source = _pass_latency(str(family), "2d", measured)
+            passes = 1 + EXTRA_PASSES.get(method, 0)
             rows.append(
                 {
                     "dataset": dataset,
@@ -155,16 +223,10 @@ def _external_rows() -> list[dict[str, Any]]:
                     "lesion_free_patients": np.nan,
                     "false_positives_on_lesion_free": np.nan,
                     "false_positives_removed": np.nan,
-                    "forward_passes": 1 + EXTRA_PASSES.get(method, 0),
-                    "latency_ms_per_frame": (1 + EXTRA_PASSES.get(method, 0))
-                    * LATENCY_MS_PER_PASS["2d"],
+                    "forward_passes": passes,
+                    "latency_ms_per_frame": passes * pass_ms,
                     "latency_s_per_volume": np.nan,
-                    "latency_source": f"{LATENCY_MS_PER_PASS['2d']:.0f} ms per pass (2-D, 352x352)"
-                    + {
-                        "unet_resnet50": "",
-                        "segformer_mit_b2": ", SegFormer",
-                        "swinunetr_2d": ", SwinUNETR",
-                    }.get(str(family), f", {family}"),
+                    "latency_source": latency_source,
                     "latency_is_estimated": True,
                     "note": "no HD95 failure-rate estimate in the external tables",
                 }
@@ -198,6 +260,21 @@ def _latency_cell(row: pd.Series) -> str:
 
 def main() -> int:
     rows: list[dict[str, Any]] = []
+    measured = _measured_latency()
+    if measured:
+        print("measured per-pass latency (results/deployment_terms/pass_latency.csv):")
+        for model, entry in measured.items():
+            print(
+                f"  {MODEL_TEXT.get(model, model):<10s} {entry['median_ms']:7.2f} ms per pass "
+                f"({entry['warmup_passes']} warm-up + median of {entry['timed_passes']} passes, "
+                f"{entry['device']} {entry['device_name']})"
+            )
+    else:
+        print(
+            "WARNING: results/deployment_terms/pass_latency.csv is missing; the 2-D latency "
+            "column falls back to the legacy 45 ms constant. Run scripts/measure_pass_latency.py.",
+            file=sys.stderr,
+        )
     for key, directory, kind, model in (
         ("cvc_unet", RESULTS / "aggregate_cvc_clinicdb_unet_resnet50", "2d", "unet_resnet50"),
         (
@@ -210,8 +287,8 @@ def main() -> int:
         ("brats", RESULTS / "aggregate_brats2021_segresnet_reduced", "3d", "segresnet"),
     ):
         if directory.is_dir():
-            rows.extend(_tail_rows(directory, key, kind, model))
-    rows.extend(_external_rows())
+            rows.extend(_tail_rows(directory, key, kind, model, measured))
+    rows.extend(_external_rows(measured))
     table = pd.DataFrame(rows)
     if table.empty:
         print("no aggregate tables found", file=sys.stderr)

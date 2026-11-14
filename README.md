@@ -551,6 +551,12 @@ of the 15 checkpoints miss (y), one point per method, with the arrow
 baseline -> TTA-8 -> TTA-8 + anyview. Figures 1, 2, 3 and 6 also carry the SegFormer arm
 (colour = dataset, marker + line style = architecture).
 
+`scripts/measure_pass_latency.py` measures **each 2-D model's own** per-pass cost (one real
+352x352 frame, 10 warm-up + median of 50 passes x 3 blocks, CUDA synchronised) into
+`results/deployment_terms/pass_latency.csv`; `scripts/deployment_terms.py` reads that file, so
+the SegFormer and SwinUNETR rows no longer borrow the UNet constant (and the table's
+`latency_source` states the measured value and the device).
+
 ### Detection-safe rules on SegFormer
 
 `configs/cvc_clinicdb/segformer_mit_b2_detrules.yaml` is `unet_resnet50_detrules.yaml` with

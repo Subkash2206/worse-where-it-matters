@@ -27,6 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import style  # noqa: E402
 
@@ -78,22 +79,20 @@ SERIES = (
         "SegFormer",
     ),
 )
-#: label anchor per (model, method), in offset points, to keep the two series apart
+#: label anchor per (model, method), in offset points, chosen so that each label sits next to
+#: its *own* marker: anyview (X) and lowdet 0.20 (up-triangle) are 5 % apart on the same y, so
+#: one is labelled above and the other below instead of to the side (which made them read swapped)
 LABEL_OFFSETS = {
-    ("unet", "baseline"): (6, 5, "left"),
-    ("unet", "tta4"): (6, 6, "left"),
-    ("unet", "tta8"): (6, 8, "left"),
-    ("unet", "tta8_anyview"): (-6, -10, "right"),
-    ("unet", "tta8_lowdet_20"): (6, 4, "left"),
-    ("unet", "tta8_lowdet_30"): (6, 2, "left"),
-    ("unet", "tta8_lowdet_40"): (0, -12, "center"),
-    ("segformer", "baseline"): (8, 14, "left"),
-    ("segformer", "tta4"): (-8, 6, "right"),
-    ("segformer", "tta8"): (-8, -6, "right"),
-    ("segformer", "tta8_anyview"): (0, -22, "center"),
-    ("segformer", "tta8_lowdet_20"): (0, 12, "center"),
-    ("segformer", "tta8_lowdet_30"): (0, -12, "center"),
-    ("segformer", "tta8_lowdet_40"): (0, 18, "center"),
+    ("unet", "baseline"): (10, 8, "left"),
+    ("unet", "tta4"): (8, 4, "left"),
+    ("unet", "tta8"): (2, 13, "center"),
+    ("unet", "tta8_anyview"): (-6, -14, "right"),
+    ("unet", "tta8_lowdet_20"): (0, 13, "center"),
+    ("unet", "tta8_lowdet_30"): (8, 4, "left"),
+    ("unet", "tta8_lowdet_40"): (-8, -13, "right"),
+    ("segformer", "baseline"): (10, 10, "left"),
+    ("segformer", "tta8"): (-8, 8, "right"),
+    ("segformer", "tta8_anyview"): (-6, -14, "right"),
 }
 #: in the SegFormer panel the seven points sit within 1 % of each other, so only the arrow
 #: sequence is labelled there; every value is printed above and readable from the table
@@ -101,6 +100,9 @@ LABELLED = {
     "unet": METHODS,
     "segformer": ("baseline", "tta8", "tta8_anyview"),
 }
+#: only the UNet panel gets the baseline -> TTA-8 -> anyview arrows; the SegFormer sequence is
+#: flat against the shared y axis (the point the figure makes) and arrows would just clutter it
+ARROW_MODELS = ("unet",)
 
 
 def collect() -> pd.DataFrame:
@@ -148,6 +150,68 @@ def collect() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _assert_label_placement(figure, axes, table, annotations) -> None:
+    """Each label must be tied to its own plotted value: assert the anchor and no overlaps.
+
+    The SegFormer points sit within 1 % of each other, so a label placed "next to" the cluster
+    cannot be attributed by proximity alone.  Every label therefore carries a thin leader line
+    that starts at its own marker, and this check asserts (a) the label's anchor is exactly the
+    plotted (x, y) of the method it names, and (b) no two label boxes overlap.
+    """
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+    failures: list[bool] = []
+    print("\nlabel placement check (anchor == plotted value, leader on the marker, no overlap):")
+    for ax, key in zip(axes, ("unet", "segformer")):
+        block = table.loc[table["model"] == key].set_index("method")
+        boxes: dict[str, object] = {}
+        for method, annotation in annotations.get(key, {}).items():
+            expected = (
+                float(block.loc[method, "false_alarm_pct"]),
+                float(block.loc[method, "miss_pct"]),
+            )
+            anchored = bool(np.allclose(annotation.xy, expected))
+            leader = annotation.arrow_patch is not None
+            boxes[method] = annotation.get_window_extent(renderer)
+            ok = anchored and leader
+            failures.append(ok)
+            print(
+                f"  {key:<10} {method:<16s} anchor ({annotation.xy[0]:6.2f}, "
+                f"{annotation.xy[1]:5.2f}) == plotted ({expected[0]:6.2f}, {expected[1]:5.2f}) "
+                f": {anchored}, leader: {leader}"
+            )
+        methods = list(boxes)
+        for first in range(len(methods)):
+            for second in range(first + 1, len(methods)):
+                left, right = methods[first], methods[second]
+                overlap = boxes[left].intersection(boxes[left], boxes[right])
+                collided = overlap is not None and min(overlap.width, overlap.height) > 0.5
+                failures.append(not collided)
+                if collided:
+                    print(f"  {key:<10} label boxes overlap: {left} vs {right}")
+    if not all(failures):
+        raise AssertionError("a fig08 label is not anchored to its own value or overlaps another")
+
+
+def _assert_arrow_targets(table, arrow_targets) -> None:
+    """Each drawn arrow must end on the marker of the method it names."""
+    block = table.loc[table["model"] == "unet"].set_index("method")
+    print("\narrow endpoints check:")
+    for name, (x, y) in arrow_targets.items():
+        target = name.split("->")[1]
+        expected = (
+            float(block.loc[target, "false_alarm_pct"]),
+            float(block.loc[target, "miss_pct"]),
+        )
+        ok = bool(np.allclose((x, y), expected))
+        print(
+            f"  {name:<24s} ends at ({x:6.2f}, {y:5.2f}) == {target} marker "
+            f"({expected[0]:6.2f}, {expected[1]:5.2f}) : {'ok' if ok else 'WRONG'}"
+        )
+        if not ok:
+            raise AssertionError(f"the arrow {name} does not end on the {target} marker")
+
+
 def main() -> int:
     style.apply()
     table = collect()
@@ -186,12 +250,15 @@ def main() -> int:
         .to_string(index=False)
     )
 
-    fig, axes = plt.subplots(1, 2, figsize=(7.6, 3.5), sharex=True)
+    fig, axes = plt.subplots(1, 2, figsize=(7.6, 3.5), sharex=True, sharey=True)
+    annotations: dict[str, dict[str, object]] = {}
+    arrow_targets: dict[str, tuple[float, float]] = {}
     for ax, (key, label, colour) in zip(
         axes, [(key, label, colour) for key, _, _, colour, label in SERIES]
     ):
         block = table.loc[table["model"] == key].set_index("method")
         block = block.loc[[method for method in METHODS if method in block.index]]
+        annotations[key] = {}
         for method in block.index:
             row = block.loc[method]
             ax.plot(
@@ -205,9 +272,9 @@ def main() -> int:
                 markeredgewidth=1.0,
                 zorder=3,
             )
-            dx, dy, alignment = LABEL_OFFSETS.get((key, str(method)), (6, 4, "left"))
+            dx, dy, alignment = LABEL_OFFSETS.get((key, str(method)), (0, 8, "center"))
             if method in LABELLED.get(key, METHODS):
-                ax.annotate(
+                annotations[key][str(method)] = ax.annotate(
                     METHOD_TEXT[method],
                     (row["false_alarm_pct"], row["miss_pct"]),
                     textcoords="offset points",
@@ -217,38 +284,56 @@ def main() -> int:
                     color="#303030",
                     zorder=4,
                     bbox={"facecolor": "white", "alpha": 0.72, "pad": 0.5, "linewidth": 0},
+                    # thin leader: the label is attached to *its* marker, not merely near it
+                    arrowprops={
+                        "arrowstyle": "-",
+                        "color": "#606060",
+                        "linewidth": 0.5,
+                        "shrinkA": 0.5,
+                        "shrinkB": 2.5,
+                        "alpha": 0.85,
+                    },
                 )
-        for source, target in ARROWS:
-            if source not in block.index or target not in block.index:
-                continue
-            ax.annotate(
-                "",
-                xy=(block.loc[target, "false_alarm_pct"], block.loc[target, "miss_pct"]),
-                xytext=(block.loc[source, "false_alarm_pct"], block.loc[source, "miss_pct"]),
-                arrowprops={
-                    "arrowstyle": "-|>",
-                    "color": colour,
-                    "linewidth": 1.0,
-                    "shrinkA": 7.0,
-                    "shrinkB": 7.0,
-                    "alpha": 0.85,
-                },
-                zorder=2,
-            )
-        peak = float(block["miss_pct"].max())
-        ax.set_ylim(-0.10 * peak - 0.02, peak * 1.22 + 0.02)
+        if key in ARROW_MODELS:
+            for source, target in ARROWS:
+                if source not in block.index or target not in block.index:
+                    continue
+                x, y = (
+                    float(block.loc[target, "false_alarm_pct"]),
+                    float(block.loc[target, "miss_pct"]),
+                )
+                ax.annotate(
+                    "",
+                    xy=(x, y),
+                    xytext=(
+                        block.loc[source, "false_alarm_pct"],
+                        block.loc[source, "miss_pct"],
+                    ),
+                    arrowprops={
+                        "arrowstyle": "-|>",
+                        "color": colour,
+                        "linewidth": 1.0,
+                        "shrinkA": 8.0,
+                        "shrinkB": 1.5,  # the head touches the marker it points at
+                        "alpha": 0.85,
+                    },
+                    zorder=2,
+                )
+                arrow_targets[f"{key}:{source}->{target}"] = (x, y)
         ax.set_xlim(float(table["false_alarm_pct"].min()) - 6.0, 104.0)
         ax.set_title(f"({'ab'[key == 'segformer']}) {label}", loc="left")
         ax.set_xlabel("false alarms on polyp-free\ncecum frames [%] (mean over 15 checkpoints)")
+    # one shared y scale for both panels: the SegFormer points sit on the floor of the same axis,
+    # which is exactly the comparison the figure is about
+    peak = float(table["miss_pct"].max())
+    axes[0].set_ylim(-0.10 * peak - 0.02, peak * 1.22 + 0.02)
     axes[0].set_ylabel(
         "missed by a majority of the checkpoints [%]\n(ColonDB + ETIS-Larib, 576 cases)"
     )
-    fig.suptitle(
-        "TTA-8 trades false alarms for missed polyps; the detection rules buy the polyps back at the "
-        "price of firing on almost every normal frame",
-        fontsize=7.0,
-        y=1.02,
-    )
+    figure_title = "TTA trades false alarms for missed polyps; the detection rules trade them back"
+    fig.suptitle(figure_title, fontsize=7.0, y=1.02)
+    _assert_label_placement(fig, axes, table, annotations)
+    _assert_arrow_targets(table, arrow_targets)
     method_handles = [
         Line2D(
             [],
@@ -267,7 +352,7 @@ def main() -> int:
         bbox_to_anchor=(0.5, -0.17),
         ncol=4,
         fontsize=5.8,
-        title="method (marker, both panels); arrows: baseline -> TTA-8 -> anyview",
+        title="method (marker, both panels); arrows in (a): baseline -> TTA-8 -> anyview",
         title_fontsize=5.8,
         columnspacing=1.0,
         handletextpad=0.4,
