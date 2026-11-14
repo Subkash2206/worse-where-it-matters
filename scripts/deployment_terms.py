@@ -86,6 +86,9 @@ def _tail_rows(directory: Path, key: str, kind: str, model: str) -> list[dict[st
                 )
             else:
                 false_positives_removed = 0.0
+            if not np.isfinite(lesion_free) or lesion_free <= 0:
+                # this collection has no empty reference at all: the column does not apply
+                lesion_free = false_positives = false_positives_removed = np.nan
         pass_ms = LATENCY_MS_PER_PASS[kind]
         passes = 1 + EXTRA_PASSES.get(method, 0)
         latency_ms = passes * pass_ms
@@ -157,7 +160,11 @@ def _external_rows() -> list[dict[str, Any]]:
                     * LATENCY_MS_PER_PASS["2d"],
                     "latency_s_per_volume": np.nan,
                     "latency_source": f"{LATENCY_MS_PER_PASS['2d']:.0f} ms per pass (2-D, 352x352)"
-                    + ("" if family == "unet_resnet50" else ", SwinUNETR"),
+                    + {
+                        "unet_resnet50": "",
+                        "segformer_mit_b2": ", SegFormer",
+                        "swinunetr_2d": ", SwinUNETR",
+                    }.get(str(family), f", {family}"),
                     "latency_is_estimated": True,
                     "note": "no HD95 failure-rate estimate in the external tables",
                 }
@@ -193,6 +200,12 @@ def main() -> int:
     rows: list[dict[str, Any]] = []
     for key, directory, kind, model in (
         ("cvc_unet", RESULTS / "aggregate_cvc_clinicdb_unet_resnet50", "2d", "unet_resnet50"),
+        (
+            "cvc_segformer",
+            RESULTS / "aggregate_cvc_clinicdb_segformer_mit_b2",
+            "2d",
+            "segformer_mit_b2",
+        ),
         ("cvc_swin", RESULTS / "aggregate_cvc_clinicdb_swinunetr_2d", "2d", "swinunetr_2d"),
         ("brats", RESULTS / "aggregate_brats2021_segresnet_reduced", "3d", "segresnet"),
     ):

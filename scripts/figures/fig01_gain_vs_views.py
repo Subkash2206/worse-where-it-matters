@@ -5,8 +5,9 @@ HD95 change against the single-view baseline, one line per setting, with the 95 
 the paired per-case delta as error bars.  Everything is read from the paired tables the aggregation
 already wrote (``paired_seed_averaged.csv`` internally, ``external_by_model/paired.csv`` externally),
 so the figure never recomputes a statistic the tables do not contain.  Colour encodes the dataset and
-the line style the architecture - solid + filled for the UNet, dashed + open for the SwinUNETR - for
-every pair, the two internal CVC-ClinicDB grids included; the legend names are ``<dataset> · <model>``.
+the line style + marker the architecture - solid + filled circle for the UNet, dash-dot + filled
+triangle for the SegFormer, dashed + open square for the SwinUNETR - for every pair, the internal
+CVC-ClinicDB grids included; the legend names are ``<dataset> · <model>``.
 """
 
 from __future__ import annotations
@@ -22,6 +23,10 @@ import style  # noqa: E402
 VIEWS = {"tta2": 2, "tta4": 4, "tta8": 8}
 SOURCES = (
     ("cvc_unet", style.RESULTS / "aggregate_cvc_clinicdb_unet_resnet50" / "paired_seed_averaged.csv"),
+    (
+        "cvc_segformer",
+        style.RESULTS / "aggregate_cvc_clinicdb_segformer_mit_b2" / "paired_seed_averaged.csv",
+    ),
     ("cvc_swin", style.RESULTS / "aggregate_cvc_clinicdb_swinunetr_2d" / "paired_seed_averaged.csv"),
     ("brats", style.RESULTS / "aggregate_brats2021_segresnet_reduced" / "paired_seed_averaged.csv"),
 )
@@ -29,51 +34,70 @@ EXTERNAL = style.RESULTS / "external_by_model" / "paired.csv"
 #: the CVC-ColonDB and SwinUNETR HD95 curves nearly coincide, so their x positions are nudged
 #: by +/-5 % (the error bars stay on the same scale; the offset is a plotting aid only)
 X_OFFSET = {"cvc_colondb": 0.95, "cvc_swin": 1.05}
-#: legend order: the two internal 2-D models, BraTS, then the three external collections
+#: architecture of every internal source (the external tables carry it in their ``family`` column)
+INTERNAL_FAMILY = {
+    "cvc_unet": "unet_resnet50",
+    "cvc_segformer": "segformer_mit_b2",
+    "cvc_swin": "swinunetr_2d",
+    "brats": "segresnet",
+}
+#: colour = dataset: the three internal CVC-ClinicDB models share the blue of that dataset
+DATASET_COLOUR_KEY = {
+    "cvc_unet": "cvc_unet",
+    "cvc_segformer": "cvc_unet",
+    "cvc_swin": "cvc_unet",
+    "brats": "brats",
+    "kvasir_seg": "kvasir_seg",
+    "cvc_colondb": "cvc_colondb",
+    "etis_larib": "etis_larib",
+}
+#: marker + line style = architecture (the SegResNet keeps the diamond of the BraTS figures)
+MODEL_STYLES = {
+    **style.MODEL_STYLES,
+    "segresnet": ("-", "D", True),
+}
+MODEL_TEXT = {**style.MODEL_LABELS, "segresnet": "SegResNet"}
+#: legend order: the three internal 2-D models, BraTS, then the three external collections
 _LEGEND_ORDER = {
     label: position
     for position, label in enumerate(
         style.LABELS[key]
-        for key in ("cvc_unet", "cvc_swin", "brats", "kvasir_seg", "cvc_colondb", "etis_larib")
+        for key in ("cvc_unet", "cvc_segformer", "cvc_swin", "brats", "kvasir_seg",
+                    "cvc_colondb", "etis_larib")
     )
 }
-#: external collections: their UNet and SwinUNETR runs share a colour and differ by line style
-EXTERNAL_KEYS = ("kvasir_seg", "cvc_colondb", "etis_larib")
 #: short collection names for the "<dataset> · <model>" legend entries
 SHORT_NAMES = {
     "cvc_unet": "CVC-ClinicDB",
+    "cvc_segformer": "CVC-ClinicDB",
     "cvc_swin": "CVC-ClinicDB",
     "brats": "BraTS 2021",
     "kvasir_seg": "Kvasir-SEG",
     "cvc_colondb": "CVC-ColonDB",
     "etis_larib": "ETIS-Larib",
 }
+#: rank of the architecture inside one dataset's legend block
+MODEL_RANK = {"unet_resnet50": 0, "segformer_mit_b2": 1, "swinunetr_2d": 2, "segresnet": 3}
 
 
 def _setting_style(setting: str) -> tuple[str, str, str, str, tuple[int, int]]:
     """Colour, marker, linestyle, label and legend sort key of one series.
 
-    Colour encodes the dataset and the line style the architecture: every pair - including the two
-    internal CVC-ClinicDB grids - is solid + filled for the UNet and dashed + open for the SwinUNETR.
+    Colour encodes the dataset and marker + line style the architecture: every pair - including the
+    three internal CVC-ClinicDB grids - is solid + filled circle for the UNet, dash-dot + filled
+    triangle for the SegFormer and dashed + open square for the SwinUNETR.  An external setting is
+    written ``<dataset>::<family>``; an internal one is the dataset key of ``SOURCES``.
     """
-    swin = setting.endswith("_swin") and setting[: -len("_swin")] in EXTERNAL_KEYS
-    base = setting[: -len("_swin")] if swin else setting
-    internal_pair = base in ("cvc_unet", "cvc_swin")
-    colour_key = "cvc_unet" if internal_pair else base
+    dataset, _, family = setting.partition("::")
+    if not family:
+        family = INTERNAL_FAMILY.get(dataset, "unet_resnet50")
+    colour_key = DATASET_COLOUR_KEY.get(dataset, dataset)
     colour = style.PALETTE.get(colour_key, "#555555")
-    marker = style.MARKERS.get(colour_key, "o")
-    label = SHORT_NAMES.get(base, base)
-    if base == "cvc_swin" or swin:
-        model = "SwinUNETR"
-    elif base == "brats":
-        model = "SegResNet"
-    else:
-        model = "UNet"
-    order = (
-        _LEGEND_ORDER.get(style.LABELS.get(base, base), 99),
-        1 if swin or base == "cvc_swin" else 0,
-    )
-    return colour, marker, "--" if model == "SwinUNETR" else "-", f"{label} · {model}", order
+    linestyle, marker, filled = MODEL_STYLES.get(family, ("-", "o", True))
+    label = f"{SHORT_NAMES.get(dataset, dataset)} · {MODEL_TEXT.get(family, family)}"
+    order = (_LEGEND_ORDER.get(style.LABELS.get(dataset, dataset), 99), MODEL_RANK.get(family, 9))
+    return colour, marker, linestyle, label, order, filled
+
 
 
 
@@ -87,7 +111,7 @@ def _rows(frame: pd.DataFrame, key: str, family: str = "unet_resnet50") -> list[
     control = "mean_control" if "mean_control" in frame.columns else "control_mean"
     if "treatment" not in frame.columns and "comparison" in frame.columns:
         frame = frame.assign(treatment=frame["comparison"].str.split().str[0])
-    setting = key if family == "unet_resnet50" else f"{key}_swin"
+    setting = key if family == "unet_resnet50" else f"{key}::{family}"
     for metric in ("dice", "hd95"):
         block = frame.loc[frame["metric"] == metric]
         if block.empty:
@@ -142,8 +166,8 @@ def main() -> int:
         block = table.loc[table["metric"] == metric]
         for setting, group in block.groupby("setting"):
             group = group.sort_values("views")
-            offset = X_OFFSET.get(str(setting), 1.0)
-            colour, marker, linestyle, series_label, order = _setting_style(str(setting))
+            offset = X_OFFSET.get(str(setting).partition("::")[0], 1.0)
+            colour, marker, linestyle, series_label, order, filled = _setting_style(str(setting))
             line = ax.errorbar(
                 group["views"] * offset,
                 group["delta"],
@@ -151,7 +175,7 @@ def main() -> int:
                 marker=marker,
                 color=colour,
                 linestyle=linestyle,
-                markerfacecolor="white" if linestyle == "--" else colour,
+                markerfacecolor=colour if filled else "white",
                 label=series_label,
                 linewidth=1.2,
                 elinewidth=0.7,

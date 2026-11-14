@@ -2,24 +2,36 @@ dataset,model,unit,method,boundary_failures_fixed_per_1000,misses_added_per_1000
 cvc_unet,unet_resnet50,frames,baseline,0.0,0.0,,,,1,45.0,,"45 ms per pass (2-D, 352x352)",True,
 cvc_unet,unet_resnet50,frames,tta4,99.673202614379,6.5359477124183005,,,,4,180.0,,"45 ms per pass (2-D, 352x352)",True,
 cvc_unet,unet_resnet50,frames,tta8,111.1111111111111,6.5359477124183005,,,,8,360.0,,"45 ms per pass (2-D, 352x352)",True,
+cvc_segformer,segformer_mit_b2,frames,baseline,0.0,0.0,,,,1,45.0,,"45 ms per pass (2-D, 352x352)",True,
+cvc_segformer,segformer_mit_b2,frames,tta4,21.241830065359498,0.0,,,,4,180.0,,"45 ms per pass (2-D, 352x352)",True,
+cvc_segformer,segformer_mit_b2,frames,tta8,21.241830065359498,0.0,,,,8,360.0,,"45 ms per pass (2-D, 352x352)",True,
 cvc_swin,swinunetr_2d,frames,baseline,0.0,0.0,,,,1,45.0,,"45 ms per pass (2-D, 352x352)",True,
 cvc_swin,swinunetr_2d,frames,tta4,47.385620915032604,0.0,,,,4,180.0,,"45 ms per pass (2-D, 352x352)",True,
 cvc_swin,swinunetr_2d,frames,tta8,65.359477124183,0.0,,,,8,360.0,,"45 ms per pass (2-D, 352x352)",True,
 brats,segresnet,patients,baseline,0.0,0.0,33.0,22.0,0.0,1,,1.75,1750 ms per pass (3-D SegResNet 128^3),True,
 brats,segresnet,patients,tta4,13.5891286970423,2.4630541871921183,33.0,20.0,2.0,4,,7.0,1750 ms per pass (3-D SegResNet 128^3),True,
 brats,segresnet,patients,tta8,15.9872102318145,0.8210180623973727,33.0,21.0,1.0,8,,14.0,1750 ms per pass (3-D SegResNet 128^3),True,
+cvc_colondb,segformer_mit_b2,frames,baseline,0.0,0.0,,,,1,45.0,,"45 ms per pass (2-D, 352x352), SegFormer",True,no HD95 failure-rate estimate in the external tables
+cvc_colondb,segformer_mit_b2,frames,tta4,,2.6315789473684212,,,,4,180.0,,"45 ms per pass (2-D, 352x352), SegFormer",True,no HD95 failure-rate estimate in the external tables
+cvc_colondb,segformer_mit_b2,frames,tta8,,2.6315789473684212,,,,8,360.0,,"45 ms per pass (2-D, 352x352), SegFormer",True,no HD95 failure-rate estimate in the external tables
 cvc_colondb,swinunetr_2d,frames,baseline,0.0,0.0,,,,1,45.0,,"45 ms per pass (2-D, 352x352), SwinUNETR",True,no HD95 failure-rate estimate in the external tables
 cvc_colondb,swinunetr_2d,frames,tta4,,0.0,,,,4,180.0,,"45 ms per pass (2-D, 352x352), SwinUNETR",True,no HD95 failure-rate estimate in the external tables
 cvc_colondb,swinunetr_2d,frames,tta8,,0.0,,,,8,360.0,,"45 ms per pass (2-D, 352x352), SwinUNETR",True,no HD95 failure-rate estimate in the external tables
 cvc_colondb,unet_resnet50,frames,baseline,0.0,0.0,,,,1,45.0,,"45 ms per pass (2-D, 352x352)",True,no HD95 failure-rate estimate in the external tables
 cvc_colondb,unet_resnet50,frames,tta4,,21.05263157894737,,,,4,180.0,,"45 ms per pass (2-D, 352x352)",True,no HD95 failure-rate estimate in the external tables
 cvc_colondb,unet_resnet50,frames,tta8,,34.21052631578947,,,,8,360.0,,"45 ms per pass (2-D, 352x352)",True,no HD95 failure-rate estimate in the external tables
+etis_larib,segformer_mit_b2,frames,baseline,0.0,0.0,,,,1,45.0,,"45 ms per pass (2-D, 352x352), SegFormer",True,no HD95 failure-rate estimate in the external tables
+etis_larib,segformer_mit_b2,frames,tta4,,0.0,,,,4,180.0,,"45 ms per pass (2-D, 352x352), SegFormer",True,no HD95 failure-rate estimate in the external tables
+etis_larib,segformer_mit_b2,frames,tta8,,0.0,,,,8,360.0,,"45 ms per pass (2-D, 352x352), SegFormer",True,no HD95 failure-rate estimate in the external tables
 etis_larib,swinunetr_2d,frames,baseline,0.0,0.0,,,,1,45.0,,"45 ms per pass (2-D, 352x352), SwinUNETR",True,no HD95 failure-rate estimate in the external tables
 etis_larib,swinunetr_2d,frames,tta4,,0.0,,,,4,180.0,,"45 ms per pass (2-D, 352x352), SwinUNETR",True,no HD95 failure-rate estimate in the external tables
 etis_larib,swinunetr_2d,frames,tta8,,0.0,,,,8,360.0,,"45 ms per pass (2-D, 352x352), SwinUNETR",True,no HD95 failure-rate estimate in the external tables
 etis_larib,unet_resnet50,frames,baseline,0.0,0.0,,,,1,45.0,,"45 ms per pass (2-D, 352x352)",True,no HD95 failure-rate estimate in the external tables
 etis_larib,unet_resnet50,frames,tta4,,56.12244897959184,,,,4,180.0,,"45 ms per pass (2-D, 352x352)",True,no HD95 failure-rate estimate in the external tables
 etis_larib,unet_resnet50,frames,tta8,,66.3265306122449,,,,8,360.0,,"45 ms per pass (2-D, 352x352)",True,no HD95 failure-rate estimate in the external tables
+kvasir_seg,segformer_mit_b2,frames,baseline,0.0,0.0,,,,1,45.0,,"45 ms per pass (2-D, 352x352), SegFormer",True,no HD95 failure-rate estimate in the external tables
+kvasir_seg,segformer_mit_b2,frames,tta4,,0.0,,,,4,180.0,,"45 ms per pass (2-D, 352x352), SegFormer",True,no HD95 failure-rate estimate in the external tables
+kvasir_seg,segformer_mit_b2,frames,tta8,,0.0,,,,8,360.0,,"45 ms per pass (2-D, 352x352), SegFormer",True,no HD95 failure-rate estimate in the external tables
 kvasir_seg,swinunetr_2d,frames,baseline,0.0,0.0,,,,1,45.0,,"45 ms per pass (2-D, 352x352), SwinUNETR",True,no HD95 failure-rate estimate in the external tables
 kvasir_seg,swinunetr_2d,frames,tta4,,0.0,,,,4,180.0,,"45 ms per pass (2-D, 352x352), SwinUNETR",True,no HD95 failure-rate estimate in the external tables
 kvasir_seg,swinunetr_2d,frames,tta8,,0.0,,,,8,360.0,,"45 ms per pass (2-D, 352x352), SwinUNETR",True,no HD95 failure-rate estimate in the external tables

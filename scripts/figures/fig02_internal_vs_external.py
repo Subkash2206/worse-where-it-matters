@@ -32,24 +32,38 @@ INTERNAL_DICE = 0.7763  # per-case mean baseline Dice of the internal CVC-Clinic
 BOOTSTRAP_DRAWS = 2000
 BOOTSTRAP_SEED = 2024
 BOOTSTRAP_CI = 0.95
-LABELS = {
-    "kvasir_seg": "Kvasir-SEG",
-    "cvc_colondb": "CVC-ColonDB",
-    "etis_larib": "ETIS-Larib",
+#: compact point labels: the architecture is already encoded by the marker and the legend
+SHORT_LABELS = {
+    "kvasir_seg": "Kvasir",
+    "cvc_colondb": "ColonDB",
+    "etis_larib": "ETIS",
 }
-#: label anchor per (collection, architecture); the two architectures need different sides
+#: short architecture tag inside a point label
+FAMILY_TAGS = {
+    "unet_resnet50": "UNet",
+    "segformer_mit_b2": "SegF",
+    "swinunetr_2d": "Swin",
+}
+#: label anchor per (collection, architecture); the three architectures need different sides
 LABEL_OFFSETS = {
-    ("kvasir_seg", "unet_resnet50"): (8, 3, "left"),
-    ("kvasir_seg", "swinunetr_2d"): (8, 2, "left"),
-    ("cvc_colondb", "unet_resnet50"): (8, 10, "left"),
-    ("cvc_colondb", "swinunetr_2d"): (-9, -10, "right"),
-    ("etis_larib", "unet_resnet50"): (-9, -12, "right"),
-    ("etis_larib", "swinunetr_2d"): (-9, 6, "right"),
+    ("kvasir_seg", "unet_resnet50"): (6, 2, "left"),
+    ("kvasir_seg", "segformer_mit_b2"): (6, -9, "left"),
+    ("kvasir_seg", "swinunetr_2d"): (6, 2, "left"),
+    ("cvc_colondb", "unet_resnet50"): (6, -7, "left"),
+    ("cvc_colondb", "segformer_mit_b2"): (-5, 7, "right"),
+    ("cvc_colondb", "swinunetr_2d"): (-6, -10, "right"),
+    ("etis_larib", "unet_resnet50"): (-6, -12, "right"),
+    ("etis_larib", "segformer_mit_b2"): (-5, 7, "right"),
+    ("etis_larib", "swinunetr_2d"): (-6, 6, "right"),
 }
 #: gaps the internal UNet must reproduce (relative percent below 0.7763)
 EXPECTED_GAPS = {"kvasir_seg": 7.8, "cvc_colondb": 18.7, "etis_larib": 40.4}
 #: internal absolute TTA-8 Dice gain each architecture must reproduce
-EXPECTED_INTERNAL_GAIN = {"unet_resnet50": 0.028, "swinunetr_2d": 0.021}
+EXPECTED_INTERNAL_GAIN = {
+    "unet_resnet50": 0.028,
+    "segformer_mit_b2": 0.011,
+    "swinunetr_2d": 0.021,
+}
 
 
 def collect(table: pd.DataFrame) -> pd.DataFrame:
@@ -98,7 +112,10 @@ def _per_case_dice(directory: Path) -> pd.DataFrame:
 
 def family_runs(family: str, dataset: str) -> Path | None:
     """Directory holding the per-case CSVs of one (family, dataset), new layout first."""
-    stem = "swinunetr_2d" if family == "swinunetr_2d" else "unet_resnet50"
+    stem = {
+        "swinunetr_2d": "swinunetr_2d",
+        "segformer_mit_b2": "segformer_mit_b2",
+    }.get(family, "unet_resnet50")
     candidates = [
         style.RESULTS / f"external_{dataset}" / stem / "evaluation",
         style.RESULTS / f"external_{dataset}" / "evaluation",
@@ -223,6 +240,7 @@ def main() -> int:
     internal_cis: dict[str, tuple[float, float]] = {}
     for family, runs in (
         ("unet_resnet50", INTERNAL_RUNS),
+        ("segformer_mit_b2", style.RESULTS / "cvc_clinicdb_segformer_mit_b2" / "evaluation"),
         ("swinunetr_2d", style.RESULTS / "cvc_clinicdb_swinunetr_2d" / "evaluation"),
     ):
         if not any(runs.glob("*_per_case.csv")):
@@ -239,9 +257,20 @@ def main() -> int:
 
     import matplotlib.pyplot as plt
 
-    families = [("unet_resnet50", "o", style.PALETTE["cvc_unet"], "UNet")]
+    families = [("unet_resnet50", "o", style.MODEL_COLOURS["unet_resnet50"], "UNet")]
+    if (points["family"] == "segformer_mit_b2").any():
+        families.append(
+            (
+                "segformer_mit_b2",
+                "^",
+                style.MODEL_COLOURS["segformer_mit_b2"],
+                "SegFormer",
+            )
+        )
     if (points["family"] == "swinunetr_2d").any():
-        families.append(("swinunetr_2d", "s", style.PALETTE["cvc_swin"], "SwinUNETR"))
+        families.append(
+            ("swinunetr_2d", "s", style.MODEL_COLOURS["swinunetr_2d"], "SwinUNETR")
+        )
 
     fig, ax = plt.subplots(figsize=(4.4, 2.9))
     internal_gains: dict[str, float] = {}
@@ -279,7 +308,8 @@ def main() -> int:
             labelled = True
             dx, dy, alignment = LABEL_OFFSETS.get((str(row["dataset"]), str(family)), (8, 3, "left"))
             ax.annotate(
-                LABELS.get(str(row["dataset"]), str(row["dataset"])) + f" ({family_label[:4]})",
+                f"{SHORT_LABELS.get(str(row['dataset']), str(row['dataset']))} "
+                f"{FAMILY_TAGS.get(str(family), str(family))}",
                 (gap, gain),
                 textcoords="offset points",
                 xytext=(dx, dy),
@@ -287,6 +317,7 @@ def main() -> int:
                 fontsize=6.0,
                 color="#303030",
                 zorder=4,
+                bbox={"facecolor": "white", "alpha": 0.72, "pad": 0.6, "linewidth": 0},
             )
         # the architecture's own internal reference at x = 0
         ax.axhline(internal_gain, color=colour, linestyle="--", linewidth=0.8, zorder=1)
@@ -322,12 +353,12 @@ def main() -> int:
         limits.extend([low, high])
     for low, high in internal_cis.values():
         limits.extend([low, high])
-    ax.set_xlim(-2.0, float(gaps.max()) + 8.0)
+    ax.set_xlim(-7.0, float(gaps.max()) + 8.0)
     ax.set_ylim(min(limits) - 0.004, max(limits) + 0.008)
     ax.set_xlabel("domain gap: baseline Dice below its own internal baseline  [%]")
     ax.set_ylabel("absolute TTA-8 Dice gain")
     ax.set_title(
-        "Under shift, the TTA gain holds or grows for UNet and shrinks to a third for SwinUNETR",
+        "Under shift the TTA-8 gain holds for UNet and SegFormer and collapses for SwinUNETR",
         fontsize=7.0,
     )
     if len(families) > 1:

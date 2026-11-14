@@ -1,19 +1,19 @@
 """Figure 6 - size subgroups: TTA-8 Dice gain and miss rate per size tertile and dataset.
 
-Two panels share the x axis (small / medium / large tertile of the reference polyp area, cut per
-dataset), and every collection is marked as external:
+Each architecture gets a column, and the two panels share the x axis (small / medium / large tertile
+of the reference polyp area, cut per dataset):
 
 * top: the paired TTA-8 Dice gain with its 95 % bootstrap CI, so a bar whose interval crosses zero is
   visible as such;
 * bottom: a paired dot plot of the share of cases that a **majority of the 15 checkpoints** miss,
   baseline against TTA-8, for the same tertile and dataset.  The two dots of a pair are joined by a
   short vertical segment and nothing is drawn across tertiles, so a reader never confuses a
-  between-dataset trend with a within-pair change - which is the price paid for the gain.  The column
-  of the SwinUNETR carries no markers at all: it misses no polyp by majority in any bin, so the panel
-  states that instead of plotting a row of zeros.
+  between-dataset trend with a within-pair change - which is the price paid for the gain.  A column
+  whose architecture misses no polyp by majority in any bin carries no markers at all and states
+  that instead of plotting a row of zeros.
 
 Both panels come straight from ``results/external_by_model``.  Colours are the shared Okabe-Ito
-palette of ``style.py``.
+palette of ``style.py`` (colour = dataset, marker shape = dataset).
 """
 
 from __future__ import annotations
@@ -50,19 +50,24 @@ def main() -> int:
     import numpy as np
 
     families = [
-        family for family in ("unet_resnet50", "swinunetr_2d") if family in set(delta["family"])
+        family
+        for family in ("unet_resnet50", "segformer_mit_b2", "swinunetr_2d")
+        if family in set(delta["family"])
     ]
     datasets = [
         name for name in ("kvasir_seg", "cvc_colondb", "etis_larib") if name in set(delta["dataset"])
     ]
-    family_label = {"unet_resnet50": "UNet", "swinunetr_2d": "SwinUNETR"}
+    family_label = {
+        "unet_resnet50": "UNet",
+        "segformer_mit_b2": "SegFormer",
+        "swinunetr_2d": "SwinUNETR",
+    }
     # one column per architecture: three series per bin instead of six in the same axis
     fig, axes = plt.subplots(
         2,
         len(families),
-        figsize=(3.6 * len(families), 3.9),
+        figsize=(3.3 * len(families), 3.9),
         sharex=True,
-        sharey="row",
         squeeze=False,
         gridspec_kw={"height_ratios": [1.15, 1.0]},
     )
@@ -70,6 +75,8 @@ def main() -> int:
     width = 0.8 / max(len(datasets), 1)
     for column, family in enumerate(families):
         top, bottom = axes[0][column], axes[1][column]
+        block_all = summary.loc[summary["family"] == family]
+        family_zero = not block_all.empty and float(block_all["miss_rate"].max()) == 0.0
         offset = -0.4 + width / 2
         for dataset in datasets:
             block = delta.loc[(delta["family"] == family) & (delta["dataset"] == dataset)]
@@ -106,7 +113,7 @@ def main() -> int:
                 & (summary["dataset"] == dataset)
                 & (summary["method"] == "tta8")
             ]
-            if not base.empty and not tta.empty and family == "unet_resnet50":
+            if not base.empty and not tta.empty and not family_zero:
                 base = base.set_index("size_bin")["miss_rate"] * 100.0
                 tta = tta.set_index("size_bin")["miss_rate"] * 100.0
                 base_values = np.array([float(base.get(bin_label, np.nan)) for bin_label in BINS])
@@ -149,15 +156,18 @@ def main() -> int:
             offset += width
         top.axhline(0.0, color="#909090", linewidth=0.7)
         top.set_ylabel("TTA-8 Dice gain" if column == 0 else "")
-        top.set_title(f"({'ab'[column]}) {family_label[family]}", loc="left")
+        top.set_title(f"({'abc'[column]}) {family_label[family]}", loc="left")
         top.set_ylim(bottom=min(-0.005, float(top.get_ylim()[0])))
         bottom.set_ylabel("missed by most checkpoints (%)" if column == 0 else "")
-        bottom.set_xlabel("reference polyp-area tertile (cut per dataset)")
+        bottom.set_xlabel("reference polyp-area tertile")
         bottom.set_xticks(positions)
         bottom.set_xticklabels([f"{label}" for label in BINS])
-        bottom.set_ylim(-0.9, float(bottom.get_ylim()[1]) * 1.06)
-        block_all = summary.loc[summary["family"] == family]
-        if not block_all.empty and float(block_all["miss_rate"].max()) == 0.0:
+        if family_zero:
+            bottom.set_ylim(-0.9, 0.9)
+        else:
+            peak = float(block_all["miss_rate"].max()) * 100.0
+            bottom.set_ylim(-0.04 * peak, peak * 1.12)
+        if family_zero:
             bottom.annotate(
                 "no majority miss in any bin",
                 (0.5, 0.5),
@@ -168,10 +178,10 @@ def main() -> int:
                 color="#606060",
             )
     fig.suptitle(
-        "UNet: TTA-8 gains Dice in most size bins but adds missed polyps in every bin on ColonDB and "
-        "ETIS",
+        "TTA-8 Dice gain by reference size (top) and the cases a majority of the 15 checkpoints "
+        "then miss (bottom)",
         y=1.03,
-        fontsize=8.5,
+        fontsize=8.0,
     )
     handles, labels = axes[0][0].get_legend_handles_labels()
     extra = [

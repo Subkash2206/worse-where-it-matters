@@ -1,15 +1,16 @@
 """Figure 3 - how often TTA loses the polyp entirely.
 
-Two panels, because the two families define a miss differently and the numbers must not be pooled:
+Two families of panels, because the three families define a miss differently and the numbers must
+not be pooled:
 
-* (a) internal CVC-ClinicDB (UNet and SwinUNETR) and BraTS: an **empty prediction on a case whose
-  reference is non-empty**, read from the seed-averaged detection table (case level, one unit per
-  case), with the Holm-adjusted McNemar p of the paired transition;
-* (b) external polyp collections: the share of cases that a **majority of the 15 checkpoints** miss,
-  with a Jeffreys interval and the McNemar p of the case-majority transition - the definition the
-  external validation reports, and the conservative companion of the per-checkpoint count.  This panel
-  shows the UNet only: the SwinUNETR never missed a polyp by majority on any external collection, so
-  its bars would be a row of zeros (the caption says so).
+* (a) internal CVC-ClinicDB (UNet, SegFormer and SwinUNETR) and BraTS: an **empty prediction on a
+  case whose reference is non-empty**, read from the seed-averaged detection table (case level, one
+  unit per case), with the Holm-adjusted McNemar p of the paired transition;
+* (b) and (c) external polyp collections, for the UNet and the SegFormer separately: the share of
+  cases that a **majority of the 15 checkpoints** miss, with a Jeffreys interval and the McNemar p of
+  the case-majority transition - the definition the external validation reports, and the conservative
+  companion of the per-checkpoint count.  The SwinUNETR gets no panel: it never missed a polyp by
+  majority on any external collection, so its bars would be a row of zeros (the run prints that).
 
 The methods are encoded as grey shades (one legend for the two panels); the p-value of every paired
 comparison sits horizontally above its pair of bars, and the panel keeps enough headroom that neither
@@ -29,15 +30,19 @@ import style  # noqa: E402
 
 INTERNAL = (
     ("cvc_unet", style.RESULTS / "aggregate_cvc_clinicdb_unet_resnet50" / "detection_seed_averaged.csv"),
+    (
+        "cvc_segformer",
+        style.RESULTS / "aggregate_cvc_clinicdb_segformer_mit_b2" / "detection_seed_averaged.csv",
+    ),
     ("cvc_swin", style.RESULTS / "aggregate_cvc_clinicdb_swinunetr_2d" / "detection_seed_averaged.csv"),
     ("brats", style.RESULTS / "aggregate_brats2021_segresnet_reduced" / "detection_seed_averaged.csv"),
 )
 EXTERNAL = style.RESULTS / "external_by_model" / "misses.csv"
 METHODS = ("baseline", "tta4", "tta8")
-INTERNAL_ORDER = ("cvc_unet", "cvc_swin", "brats")
-#: panel (b) shows the UNet; the SwinUNETR has no majority-missed polyp at all (printed as a note)
-EXTERNAL_FAMILY = "unet_resnet50"
-EXTERNAL_ORDER = ("kvasir_seg", "cvc_colondb", "etis_larib")
+INTERNAL_ORDER = ("cvc_unet", "cvc_segformer", "cvc_swin", "brats")
+#: panel (b) shows the two 2-D polyp models; the SwinUNETR misses no polyp by majority at all
+EXTERNAL_FAMILIES = ("unet_resnet50", "segformer_mit_b2")
+EXTERNAL_DATASETS = ("kvasir_seg", "cvc_colondb", "etis_larib")
 #: grey shades, light to dark per method (the legend is shared by both panels)
 GREY = {"baseline": "#333333", "tta4": "#8a8a8a", "tta8": "#c6c6c6"}
 #: the method names as every other figure writes them
@@ -45,17 +50,21 @@ METHOD_TEXT = {"baseline": "baseline", "tta4": "TTA-4", "tta8": "TTA-8"}
 #: two-line tick labels: the full names are too wide for a two-panel figure
 SHORT_LABELS = {
     "cvc_unet": "CVC-ClinicDB\nUNet",
+    "cvc_segformer": "CVC-ClinicDB\nSegFormer",
     "cvc_swin": "CVC-ClinicDB\nSwinUNETR",
     "brats": "BraTS 2021\nSegResNet",
-    "kvasir_seg::unet_resnet50": "Kvasir-SEG\nexternal",
+    "kvasir_seg::unet_resnet50": "Kvasir-SEG\nUNet",
+    "kvasir_seg::segformer_mit_b2": "Kvasir-SEG\nSegFormer",
     "kvasir_seg::swinunetr_2d": "Kvasir-SEG\nSwinUNETR",
-    "cvc_colondb::unet_resnet50": "CVC-ColonDB\nexternal",
+    "cvc_colondb::unet_resnet50": "CVC-ColonDB\nUNet",
+    "cvc_colondb::segformer_mit_b2": "CVC-ColonDB\nSegFormer",
     "cvc_colondb::swinunetr_2d": "CVC-ColonDB\nSwinUNETR",
-    "etis_larib::unet_resnet50": "ETIS-Larib\nexternal",
+    "etis_larib::unet_resnet50": "ETIS-Larib\nUNet",
+    "etis_larib::segformer_mit_b2": "ETIS-Larib\nSegFormer",
     "etis_larib::swinunetr_2d": "ETIS-Larib\nSwinUNETR",
-    "kvasir_seg": "Kvasir-SEG\nexternal",
-    "cvc_colondb": "CVC-ColonDB\nexternal",
-    "etis_larib": "ETIS-Larib\nexternal",
+    "kvasir_seg": "Kvasir-SEG",
+    "cvc_colondb": "CVC-ColonDB",
+    "etis_larib": "ETIS-Larib",
 }
 
 
@@ -94,9 +103,9 @@ def collect() -> pd.DataFrame:
     if EXTERNAL.is_file():
         table = pd.read_csv(EXTERNAL)
         for (dataset, family), block in table.groupby(["dataset", "family"]):
-            if family != EXTERNAL_FAMILY:
+            if family not in EXTERNAL_FAMILIES:
                 continue  # the SwinUNETR never misses a polyp by majority (see the printed note)
-            key = str(dataset)
+            key = f"{dataset}::{family}"
             for method in METHODS:
                 row = block.loc[block["method"] == method]
                 if row.empty:
@@ -178,6 +187,19 @@ def _panel(
                 capsize=1.5,
                 zorder=4,
             )
+            if rate <= 0.0:
+                # an exact zero has no bar to see: say so instead of leaving an empty slot
+                ax.annotate(
+                    "0",
+                    (index + (offset - 1) * width, 0.0),
+                    textcoords="offset points",
+                    xytext=(0, 1.2),
+                    ha="center",
+                    va="bottom",
+                    fontsize=5.2,
+                    color="#505050",
+                    zorder=5,
+                )
         # one horizontal p label per TTA method, above the pair (baseline, that method); the label
         # sits over its own bar so the two labels of a group never shadow each other
         base_top = tops.get("baseline", 0.0)
@@ -227,21 +249,31 @@ def main() -> int:
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
 
-    fig, (internal, external) = plt.subplots(1, 2, figsize=(7.2, 3.2))
+    fig, (internal, external_unet, external_segformer) = plt.subplots(
+        1, 3, figsize=(9.2, 3.1), gridspec_kw={"width_ratios": [1.35, 1.0, 1.0]}
+    )
     _panel(
         internal,
         table,
         INTERNAL_ORDER,
         "(a) internal: empty prediction",
         "empty predictions [%]",
+        rotate=22.0,
     )
-    _panel(
-        external,
-        table,
-        EXTERNAL_ORDER,
-        "(b) external: missed by >= 8 of 15 checkpoints",
-        "majority-miss rate [%]",
-    )
+    for panel, letter, family, label in (
+        (external_unet, "b", "unet_resnet50", "UNet"),
+        (external_segformer, "c", "segformer_mit_b2", "SegFormer"),
+    ):
+        block = table.loc[table["dataset"].str.endswith(f"::{family}")].copy()
+        block["dataset"] = block["dataset"].str.split("::").str[0]
+        _panel(
+            panel,
+            block,
+            EXTERNAL_DATASETS,
+            f"({letter}) external, {label}: majority miss",
+            "majority-miss rate [%]",
+            rotate=18.0,
+        )
     if EXTERNAL.is_file():
         swin = pd.read_csv(EXTERNAL)
         swin = swin.loc[swin["family"] == "swinunetr_2d"]
@@ -251,8 +283,8 @@ def main() -> int:
                 for _, row in swin.loc[swin["method"] == "tta8"].iterrows()
             )
             print(
-                "caption note: panel (b) shows the UNet; the SwinUNETR has no majority-missed polyp "
-                f"on any external collection (TTA-8: {per_dataset})"
+                "caption note: panels (b) and (c) show the UNet and the SegFormer; the SwinUNETR has "
+                f"no majority-missed polyp on any external collection (TTA-8: {per_dataset})"
             )
     handles = [
         Patch(facecolor=GREY[method], edgecolor="white", label=METHOD_TEXT[method])

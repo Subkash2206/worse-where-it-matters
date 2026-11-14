@@ -538,6 +538,19 @@ checkpoints and the **majority over checkpoints** (>= 8 of 15), the **median fal
 the **exact McNemar** test against `baseline` and against plain `tta8` (unit = frame, with the
 pooled checkpoint x frame pairs as a secondary unit).
 
+The same runs feed the sanity overlay `scripts/figures/sanity_false_alarms.py` (CPU only). It
+re-runs the `fold0_seed0` UNet and SegFormer baseline on a seeded draw of false alarms, prints
+the recomputed area and peak probability next to the stored ones, attributes every region to
+mucosa / black border / green endoscope box / overlay text, and asserts that the maskless
+loader produces the **same network input tensor** as Kvasir-SEG for the same frame file. The
+overlay is `results/figures_paper/sanity_false_alarms.png`.
+
+`scripts/figures/fig08_operating_point.py` puts both cohorts on one axis: false-alarm rate on
+the polyp-free frames (x) against the share of CVC-ColonDB + ETIS-Larib cases that a majority
+of the 15 checkpoints miss (y), one point per method, with the arrow
+baseline -> TTA-8 -> TTA-8 + anyview. Figures 1, 2, 3 and 6 also carry the SegFormer arm
+(colour = dataset, marker + line style = architecture).
+
 ### Detection-safe rules on SegFormer
 
 `configs/cvc_clinicdb/segformer_mit_b2_detrules.yaml` is `unet_resnet50_detrules.yaml` with

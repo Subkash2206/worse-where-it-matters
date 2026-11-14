@@ -33,10 +33,11 @@ OKABE_ITO = {
     "purple": "#CC79A7",
 }
 
-#: one colour per setting; the two internal architectures share the blue family
+#: one colour per setting; the three internal architectures share the blue family
 PALETTE = {
     "cvc_unet": OKABE_ITO["blue"],
     "cvc_swin": OKABE_ITO["sky"],
+    "cvc_segformer": OKABE_ITO["blue"],  # colour = dataset: the third internal CVC model too
     "brats": OKABE_ITO["purple"],
     "kvasir_seg": OKABE_ITO["vermillion"],
     "cvc_colondb": OKABE_ITO["orange"],
@@ -45,6 +46,7 @@ PALETTE = {
 MARKERS = {
     "cvc_unet": "o",
     "cvc_swin": "s",
+    "cvc_segformer": "^",
     "brats": "D",
     "kvasir_seg": "^",
     "cvc_colondb": "v",
@@ -53,11 +55,32 @@ MARKERS = {
 LABELS = {
     "cvc_unet": "CVC-ClinicDB, UNet",
     "cvc_swin": "CVC-ClinicDB, SwinUNETR",
+    "cvc_segformer": "CVC-ClinicDB, SegFormer",
     "brats": "BraTS 2021, SegResNet",
     "kvasir_seg": "Kvasir-SEG (external)",
     "cvc_colondb": "CVC-ColonDB (external)",
     "etis_larib": "ETIS-Larib (external)",
 }
+
+#: architecture markers and line styles, shared by every figure that compares models:
+#: UNet solid + filled circle, SegFormer dash-dot + filled triangle, SwinUNETR dashed + open square
+MODEL_STYLES = {
+    "unet_resnet50": ("-", "o", True),
+    "segformer_mit_b2": ("-.", "^", True),
+    "swinunetr_2d": ("--", "s", False),
+}
+MODEL_LABELS = {
+    "unet_resnet50": "UNet",
+    "segformer_mit_b2": "SegFormer",
+    "swinunetr_2d": "SwinUNETR",
+}
+#: colour per architecture, used where the architecture (not the dataset) is the series
+MODEL_COLOURS = {
+    "unet_resnet50": OKABE_ITO["blue"],
+    "segformer_mit_b2": OKABE_ITO["vermillion"],
+    "swinunetr_2d": OKABE_ITO["sky"],
+}
+
 
 
 def apply() -> None:
