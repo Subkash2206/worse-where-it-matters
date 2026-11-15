@@ -126,6 +126,7 @@ python scripts/false_alarm_report.py --run unet=results/false_alarm/unet --run s
 python scripts/measure_pass_latency.py
 python scripts/deployment_terms.py
 python scripts/paper_checks/brats_et_only.py   # BraTS tail and uncertainty numbers on the 1218 patients with ET
+python scripts/paper_checks/overlap_misses.py  # empty predictions vs lesions with no overlap, all models and datasets (needs the per-case files)
 ```
 
 Use `--help` on any script for the full argument list.
@@ -144,7 +145,7 @@ Each script reads the committed tables in `results/` and writes a PDF and a 300 
 | Paper content | Directory under `results/` |
 |---|---|
 | Internal results per model (Dice, NSD, HD95, misses, tails, uncertainty audit) | `aggregate_cvc_clinicdb_*`, `aggregate_brats2021_segresnet_reduced` |
-| BraTS numbers restricted to patients with ET | `paper_checks` |
+| BraTS numbers restricted to patients with ET; missed lesions counted by overlap (Dice = 0) | `paper_checks` |
 | Model comparisons and gain vs model quality | `compare_models` |
 | Data-fraction sweep | `compare_data_sweep` |
 | MC-Dropout | `mc_dropout_cvc_clinicdb_unet_resnet50_dropout`, `aggregate_cvc_clinicdb_unet_resnet50_dropout` |

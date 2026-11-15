@@ -270,8 +270,8 @@ def main() -> int:
             panel,
             block,
             EXTERNAL_DATASETS,
-            f"({letter}) external, {label}: majority miss",
-            "majority-miss rate [%]",
+            f"({letter}) external, {label}: majority empty",
+            "majority-empty rate [%]",
             rotate=18.0,
         )
     if EXTERNAL.is_file():
@@ -284,7 +284,7 @@ def main() -> int:
             )
             print(
                 "caption note: panels (b) and (c) show the UNet and the SegFormer; the SwinUNETR has "
-                f"no majority-missed polyp on any external collection (TTA-8: {per_dataset})"
+                f"no image empty by majority on any external collection (TTA-8: {per_dataset})"
             )
     handles = [
         Patch(facecolor=GREY[method], edgecolor="white", label=METHOD_TEXT[method])

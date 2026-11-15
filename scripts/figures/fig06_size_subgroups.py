@@ -158,7 +158,7 @@ def main() -> int:
         top.set_ylabel("TTA-8 Dice gain" if column == 0 else "")
         top.set_title(f"({'abc'[column]}) {family_label[family]}", loc="left")
         top.set_ylim(bottom=min(-0.005, float(top.get_ylim()[0])))
-        bottom.set_ylabel("missed by most checkpoints (%)" if column == 0 else "")
+        bottom.set_ylabel("empty in most checkpoints (%)" if column == 0 else "")
         bottom.set_xlabel("reference polyp-area tertile")
         bottom.set_xticks(positions)
         bottom.set_xticklabels([f"{label}" for label in BINS])
@@ -169,7 +169,7 @@ def main() -> int:
             bottom.set_ylim(-0.04 * peak, peak * 1.12)
         if family_zero:
             bottom.annotate(
-                "no majority miss in any bin",
+                "no image empty by majority in any bin",
                 (0.5, 0.5),
                 xycoords="axes fraction",
                 ha="center",
@@ -179,7 +179,7 @@ def main() -> int:
             )
     fig.suptitle(
         "TTA-8 Dice gain by reference size (top) and the cases a majority of the 15 checkpoints "
-        "then miss (bottom)",
+        "then leave empty (bottom)",
         y=1.03,
         fontsize=8.0,
     )

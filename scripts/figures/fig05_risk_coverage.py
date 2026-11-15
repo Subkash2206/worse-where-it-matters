@@ -316,7 +316,7 @@ def main() -> int:
         primary,
         table,
         "non_missed",
-        "(a) non-missed failures\nDice < 0.5, empty predictions excluded",
+        "(a) failures with a non-empty prediction\nDice < 0.5, empty predictions excluded",
         audit,
         "non_missed",
     )

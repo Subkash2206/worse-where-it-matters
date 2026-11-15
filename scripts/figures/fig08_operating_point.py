@@ -328,9 +328,9 @@ def main() -> int:
     peak = float(table["miss_pct"].max())
     axes[0].set_ylim(-0.10 * peak - 0.02, peak * 1.22 + 0.02)
     axes[0].set_ylabel(
-        "missed by a majority of the checkpoints [%]\n(ColonDB + ETIS-Larib, 576 cases)"
+        "empty in a majority of the checkpoints [%]\n(ColonDB + ETIS-Larib, 576 images)"
     )
-    figure_title = "TTA trades false alarms for missed images; the detection rules trade them back"
+    figure_title = "TTA trades false alarms for empty predictions; the detection rules trade them back"
     fig.suptitle(figure_title, fontsize=7.0, y=1.02)
     _assert_label_placement(fig, axes, table, annotations)
     _assert_arrow_targets(table, arrow_targets)
