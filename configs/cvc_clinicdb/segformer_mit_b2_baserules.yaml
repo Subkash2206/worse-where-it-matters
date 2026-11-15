@@ -1,0 +1,39 @@
+# -----------------------------------------------------------------------------
+# Low-threshold rule on the SINGLE view (no TTA), same 15 SegFormer checkpoints.
+#
+# Control for the detection-rule results: does a single view with the same rescue rule
+# do as well as TTA-8 with the rule?  `baseline_lowdet_T` reuses the one identity pass:
+# if the 0.5 mask is empty but the probability map peaks at >= T, the mask is the map
+# thresholded at T; otherwise the plain 0.5 mask.  One forward pass per case, nothing is
+# retrained.
+#
+#   python scripts/evaluate_external.py --config configs/external/polyp_external.yaml \
+#       --models cvc_clinicdb/segformer_mit_b2_baserules --datasets cvc_colondb etis_larib \
+#       --folds 0 1 2 3 4 --seeds 0 1 2 --output-dir results/baserules
+# -----------------------------------------------------------------------------
+defaults:
+  - segformer_mit_b2.yaml
+
+experiment:
+  name: cvc_clinicdb_segformer_mit_b2_baserules
+  description: "SegFormer CVC-ClinicDB: low-threshold rule on the single view (no retraining)"
+
+tta:
+  aggregator: mean
+  methods:
+    - name: baseline
+      views:
+        - { name: identity, ops: [] }
+    - { name: baseline_lowdet_20, derived_from: baseline, rule: lowdet_20 }
+    - { name: baseline_lowdet_30, derived_from: baseline, rule: lowdet_30 }
+    - { name: baseline_lowdet_40, derived_from: baseline, rule: lowdet_40 }
+
+evaluation:
+  split: test
+  output_dir: results/${experiment.name}/evaluation
+  save_probability_maps: false
+  probability_map_methods: []
+
+training:
+  # reuse the 15 SegFormer checkpoints: evaluation only, never "train from scratch"
+  checkpoint_dir: checkpoints/cvc_clinicdb_segformer_mit_b2

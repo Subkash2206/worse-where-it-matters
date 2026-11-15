@@ -1,0 +1,33 @@
+{
+  "dataset": "hyperkvasir_cecum",
+  "folds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "git_revision": "4ecf6a8",
+  "images_dir": "C:/Users/subka/Documents/datasets/polyp/hyperkvasir_cecum",
+  "internal_models": [
+    "unet_resnet50_baserules"
+  ],
+  "label": "HyperKvasir - normal cecum (polyp-free)",
+  "limit": null,
+  "masks_dir": null,
+  "metrics": [
+    "pred_empty",
+    "pred_area_px",
+    "max_prob"
+  ],
+  "n_bootstrap": 10000,
+  "n_checkpoints": 15,
+  "references": "empty",
+  "scope": "external",
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "unit": "group"
+}

@@ -1,0 +1,7 @@
+threshold,dataset,majority_empty_only_tta8_rule,majority_empty_only_single_rule,majority_empty_mcnemar_p,majority_no_overlap_only_tta8_rule,majority_no_overlap_only_single_rule,majority_no_overlap_mcnemar_p
+0.40,cvc_colondb,10,7,0.629058837890625,2,3,1.0
+0.40,etis_larib,11,1,0.00634765625,4,5,1.0
+0.30,cvc_colondb,21,1,1.0967254638671875e-05,2,7,0.1796875
+0.30,etis_larib,5,0,0.0625,3,6,0.5078125
+0.20,cvc_colondb,13,0,0.000244140625,1,19,4.00543212890625e-05
+0.20,etis_larib,0,0,1.0,2,9,0.0654296875

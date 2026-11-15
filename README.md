@@ -127,6 +127,7 @@ python scripts/measure_pass_latency.py
 python scripts/deployment_terms.py
 python scripts/paper_checks/brats_et_only.py   # BraTS tail and uncertainty numbers on the 1218 patients with ET
 python scripts/paper_checks/overlap_misses.py  # empty predictions vs lesions with no overlap, all models and datasets (needs the per-case files)
+python scripts/paper_checks/single_view_rule.py # low-threshold rule on the single view vs on TTA-8 (UNet, external; needs the per-case files)
 ```
 
 Use `--help` on any script for the full argument list.
@@ -152,6 +153,7 @@ Each script reads the committed tables in `results/` and writes a PDF and a 300 
 | Deep ensembles | `ensemble_*.csv` inside each `aggregate_cvc_clinicdb_*` |
 | External validation | `external_validation`, `external_by_model`, `external_kvasir_seg`, `external_cvc_colondb`, `external_etis_larib` |
 | Detection-safe rules | `detection_rules`, `detection_rules_segformer`, `detrules`, `detrules_segformer` |
+| Low-threshold rule on the single view (control; configs `*_baserules.yaml`) | `baserules`, `false_alarm_baserules`, `paper_checks` |
 | False alarms on polyp-free / lesion-free data | `false_alarm`, `external_hyperkvasir_cecum` |
 | Lesion-size subgroups | `subgroups`, `subgroups_brats2021` |
 | Deployment cost | `deployment_terms` |

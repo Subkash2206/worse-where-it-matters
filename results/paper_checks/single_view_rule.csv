@@ -1,0 +1,11 @@
+source,method,false_alarm_pct,cvc_colondb_majority_empty,cvc_colondb_majority_no_overlap,cvc_colondb_pairs_empty,cvc_colondb_pairs_no_overlap,cvc_colondb_mean_dice,etis_larib_majority_empty,etis_larib_majority_no_overlap,etis_larib_pairs_empty,etis_larib_pairs_no_overlap,etis_larib_mean_dice
+single,baseline,70.82,55,70,815,1022,0.6307,5,33,196,516,0.4627
+single,baseline_lowdet_40,75.64,50,68,741,998,0.6308,4,33,163,508,0.4628
+single,baseline_lowdet_30,84.84,25,66,519,974,0.6315,0,33,103,500,0.463
+single,baseline_lowdet_20,96.39,0,64,237,912,0.6327,0,33,28,490,0.4634
+tta,baseline,70.82,55,70,815,1022,0.6307,5,33,196,516,0.4627
+tta,tta8,56.54,68,70,983,1067,0.6557,18,33,297,492,0.5469
+tta,tta8_lowdet_40,66.44,53,67,855,975,0.6588,14,32,232,465,0.5491
+tta,tta8_lowdet_30,78.49,45,61,643,882,0.6652,5,30,144,427,0.5537
+tta,tta8_lowdet_20,89.46,13,46,371,750,0.6755,0,26,48,378,0.5592
+tta,tta8_anyview,94.48,13,36,283,622,0.6826,0,24,16,395,0.5573
