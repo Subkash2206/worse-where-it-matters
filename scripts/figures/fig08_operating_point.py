@@ -330,7 +330,7 @@ def main() -> int:
     axes[0].set_ylabel(
         "missed by a majority of the checkpoints [%]\n(ColonDB + ETIS-Larib, 576 cases)"
     )
-    figure_title = "TTA trades false alarms for missed polyps; the detection rules trade them back"
+    figure_title = "TTA trades false alarms for missed images; the detection rules trade them back"
     fig.suptitle(figure_title, fontsize=7.0, y=1.02)
     _assert_label_placement(fig, axes, table, annotations)
     _assert_arrow_targets(table, arrow_targets)
