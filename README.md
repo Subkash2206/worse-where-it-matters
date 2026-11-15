@@ -161,23 +161,7 @@ Per-case CSVs, probability maps and checkpoints are not committed (size); they a
 
 ## Notes
 
-- **Package name.** The library is called `melba` for historical reasons (the project was first planned as a journal extension). It has no other meaning.
 - **`legacy_results/`** holds tables from an earlier code base that split CVC-ClinicDB by frame rather than by sequence, which leaks near-duplicate frames between training and test. They are kept for reference only and are not used anywhere in the paper.
 - **Intensity TTA.** The `*_intensity*` configs and `queues/intensity_queue.yaml` belong to an exploratory experiment that is not reported in the paper. Treat them as unsupported.
 - **Determinism.** Runs use deterministic algorithms and fixed seeds, but exact numbers can still differ across GPUs, drivers and library versions.
 
-## Citation
-
-```bibtex
-@inproceedings{kashyap2027better,
-  title     = {Better on Average, Worse Where It Matters: A Reliability Audit of Geometric Test-Time Augmentation in Medical Image Segmentation},
-  author    = {Kashyap, Subhash and others},
-  booktitle = {Medical Imaging with Deep Learning (MIDL)},
-  year      = {2027},
-  note      = {Under review}
-}
-```
-
-## License
-
-See `LICENSE`.
