@@ -1,8 +1,8 @@
-# Better on Average, Not Always Where It Matters
+# How Misses Are Counted Decides Whether Test-Time Augmentation Looks Harmful
 
 Code, configurations, split files and result tables for
 
-> **Better on Average, Not Always Where It Matters: A Reliability Audit of Geometric Test-Time Augmentation in Medical Image Segmentation.**
+> **How Misses Are Counted Decides Whether Test-Time Augmentation Looks Harmful: A Reliability Audit in Polyp and Brain Tumour Segmentation.**
 > Submitted to MIDL 2027 (Clinical Translation and Validation track).
 
 Test-time augmentation (TTA) raises mean Dice cheaply, but means can hide missed lesions. This repository treats geometric TTA as a pre-deployment validation question. It evaluates TTA with 1, 2, 4 and 8 dihedral (D4) views on:
@@ -12,7 +12,7 @@ Test-time augmentation (TTA) raises mean Dice cheaply, but means can hide missed
 
 The 2D models are tested without retraining on Kvasir-SEG, CVC-ColonDB and ETIS-Larib, and on 1009 polyp-free HyperKvasir cecum frames. Besides Dice, NSD and HD95, the study reports missed lesions, false alarms and error tails, audits uncertainty signals, compares against MC-Dropout and deep ensembles, and tests two detection-safe rules (any-view and a low threshold) that reuse the TTA views.
 
-Main finding: TTA with 4 or 8 views improved Dice, NSD and HD95 for every model on every dataset with lesions, but under domain shift it also changed which lesions were found. For the weakest model (SwinUNETR), images on which most checkpoints had no overlap with the polyp rose on all three external sets (ETIS-Larib: 50 to 71 of 196) while Dice rose. For UNet, more images were left empty (ETIS-Larib: 5 to 18), but most of them had no overlap with the polyp before TTA, and the number of missed images did not change in net. The detection rules cut UNet's missed images below the single-view count at a measured cost in false alarms on polyp-free frames.
+Main finding: TTA with 4 or 8 views improved Dice, NSD and HD95 for every model on every dataset with lesions. Whether it lost lesions under domain shift depended on how a miss was counted. By empty masks UNet looked harmed (ETIS-Larib: 5 to 18 of 196 images left empty by most checkpoints). By any overlap with the polyp the weak SwinUNETR looked harmed (50 to 71). With an intersection over union of at least 0.10 required, no model missed more images and UNet missed fewer (55 to 46), with fewer false alarms on polyp-free frames. TTA moved the operating point without losing localised lesions. Two rules that reuse the views recovered more polyps at a large cost in false alarms.
 
 ## Repository layout
 
@@ -128,6 +128,8 @@ python scripts/deployment_terms.py
 python scripts/paper_checks/brats_et_only.py   # BraTS tail and uncertainty numbers on the 1218 patients with ET
 python scripts/paper_checks/overlap_misses.py  # empty predictions vs lesions with no overlap, all models and datasets (needs the per-case files)
 python scripts/paper_checks/single_view_rule.py # low-threshold rule on the single view vs on TTA-8 (UNet, external; needs the per-case files)
+python scripts/paper_checks/robustness_checks.py # missed lesions by IoU threshold, spread over checkpoints, clustering (needs the per-case files)
+python scripts/paper_checks/operating_curve.py   # single view vs TTA-8 on the empty-vs-false-alarm curve (reads single_view_rule.csv)
 ```
 
 Use `--help` on any script for the full argument list.

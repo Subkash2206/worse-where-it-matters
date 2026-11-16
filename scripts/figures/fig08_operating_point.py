@@ -54,14 +54,15 @@ METHOD_TEXT = {
     "baseline": "baseline",
     "tta4": "TTA-4",
     "tta8": "TTA-8",
-    "tta8_anyview": "anyview",
-    "tta8_lowdet_20": "lowdet 0.20",
-    "tta8_lowdet_30": "lowdet 0.30",
-    "tta8_lowdet_40": "lowdet 0.40",
+    "tta8_anyview": "any-view",
+    "tta8_lowdet_20": "low-thr. 0.20",
+    "tta8_lowdet_30": "low-thr. 0.30",
+    "tta8_lowdet_40": "low-thr. 0.40",
 }
 #: the sequence the arrows follow
 ARROWS = (("baseline", "tta8"), ("tta8", "tta8_anyview"))
 MISS_DATASETS = ("cvc_colondb", "etis_larib")
+SINGLE_VIEW = style.RESULTS / "paper_checks" / "single_view_rule.csv"
 #: (model key, false-alarm table, detection-rule report root, colour, label)
 SERIES = (
     (
@@ -320,6 +321,28 @@ def main() -> int:
                     zorder=2,
                 )
                 arrow_targets[f"{key}:{source}->{target}"] = (x, y)
+        if key == "unet" and SINGLE_VIEW.is_file():
+            # the same low-threshold rule on the single view (results/paper_checks/single_view_rule.csv):
+            # after the rule a prediction is empty exactly when its maximum probability is below t,
+            # so these are points of the single-view detection curve; the TTA-8 points are joined too
+            single = pd.read_csv(SINGLE_VIEW)
+            single = single[single["source"] == "single"].set_index("method")
+            order = ["baseline", "baseline_lowdet_40", "baseline_lowdet_30", "baseline_lowdet_20"]
+            xs = [float(single.loc[m, "false_alarm_pct"]) for m in order]
+            ys = [
+                100.0
+                * (single.loc[m, "cvc_colondb_majority_empty"] + single.loc[m, "etis_larib_majority_empty"])
+                / 576.0
+                for m in order
+            ]
+            ax.plot(xs, ys, linestyle=(0, (3, 2)), color=colour, linewidth=0.9, alpha=0.9, zorder=1)
+            for x, y, marker in zip(xs[1:], ys[1:], ["P", "v", "^"]):
+                ax.plot(x, y, linestyle="none", marker=marker, markersize=6.0, markerfacecolor="white",
+                        markeredgecolor=colour, markeredgewidth=1.0, zorder=3)
+            tta_order = [m for m in ["tta8", "tta8_lowdet_40", "tta8_lowdet_30", "tta8_lowdet_20"] if m in block.index]
+            ax.plot(block.loc[tta_order, "false_alarm_pct"], block.loc[tta_order, "miss_pct"],
+                    linestyle="-", color=colour, linewidth=0.9, alpha=0.9, zorder=1)
+            print("single-view curve (false alarm %, empty %):", [(round(x, 2), round(y, 2)) for x, y in zip(xs, ys)])
         ax.set_xlim(float(table["false_alarm_pct"].min()) - 6.0, 104.0)
         ax.set_title(f"({'ab'[key == 'segformer']}) {label}", loc="left")
         ax.set_xlabel("false alarms on polyp-free\ncecum frames [%] (mean over 15 checkpoints)")
@@ -330,7 +353,7 @@ def main() -> int:
     axes[0].set_ylabel(
         "empty in a majority of the checkpoints [%]\n(ColonDB + ETIS-Larib, 576 images)"
     )
-    figure_title = "TTA trades false alarms for empty predictions; the detection rules trade them back"
+    figure_title = "TTA trades false alarms for empty predictions; the recovery rules trade them back"
     fig.suptitle(figure_title, fontsize=7.0, y=1.02)
     _assert_label_placement(fig, axes, table, annotations)
     _assert_arrow_targets(table, arrow_targets)

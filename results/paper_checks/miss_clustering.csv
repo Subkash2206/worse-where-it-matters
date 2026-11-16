@@ -1,0 +1,9 @@
+dataset,model,count,newly,runs_observed,runs_expected_random,p_fewer_or_equal_runs,image_numbers
+cvc_colondb,unet,empty,15,15,14.46,1.0,1 12 29 74 116 208 285 292 312 317 322 346 357 374 378
+cvc_colondb,segformer,iou_below_010_recovered,5,5,4.94,1.0,306 311 315 326 341
+cvc_colondb,swinunetr,no_overlap,27,21,25.17,0.0062,30 54 56 76 89 100 109 110 119 146 156 217 226 273 279 280 299 300 309 313 314 343 345 346 348 364 365
+cvc_colondb,swinunetr,iou_below_010_recovered,17,17,16.3,1.0,42 47 60 86 88 90 207 212 235 243 246 249 252 255 258 261 324
+etis_larib,unet,empty,14,9,13.06,0.0011,36 45 46 47 58 77 79 99 100 103 147 194 195 196
+etis_larib,unet,no_overlap,5,5,4.9,1.0,45 57 69 99 103
+etis_larib,unet,iou_below_010_recovered,9,7,8.63,0.0447,7 9 38 89 121 122 123 135 138
+etis_larib,swinunetr,no_overlap,22,17,19.65,0.0719,38 39 40 41 43 45 52 57 75 80 93 102 118 122 132 139 143 144 145 174 184 188

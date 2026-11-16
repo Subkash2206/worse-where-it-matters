@@ -1,0 +1,9 @@
+curve,threshold,method,false_alarm_pct,empty_pct_pairs,empty_pct_majority,tta8_empty_pct_pairs_at_same_false_alarm,tta8_empty_pct_majority_at_same_false_alarm
+single view,0.5,baseline,70.82,11.7,10.42,11.32,10.56
+single view,0.4,baseline_lowdet_40,75.64,10.46,9.38,9.93,9.38
+single view,0.3,baseline_lowdet_30,84.84,7.2,4.34,6.64,4.96
+single view,0.2,baseline_lowdet_20,96.39,3.07,0.0,,
+TTA-8,0.5,tta8,56.54,14.81,14.93,,
+TTA-8,0.4,tta8_lowdet_40,66.44,12.58,11.63,,
+TTA-8,0.3,tta8_lowdet_30,78.49,9.11,8.68,,
+TTA-8,0.2,tta8_lowdet_20,89.46,4.85,2.26,,
