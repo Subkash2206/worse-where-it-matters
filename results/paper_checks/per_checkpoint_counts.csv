@@ -1,0 +1,91 @@
+dataset,model,method,checkpoint,empty,no_overlap,iou_below_010
+kvasir_seg,unet,single view,0_0,3,8,71
+kvasir_seg,unet,single view,0_1,1,2,33
+kvasir_seg,unet,single view,0_2,3,8,69
+kvasir_seg,unet,single view,1_0,0,2,25
+kvasir_seg,unet,single view,1_1,2,7,24
+kvasir_seg,unet,single view,1_2,0,1,20
+kvasir_seg,unet,single view,2_0,2,7,70
+kvasir_seg,unet,single view,2_1,4,5,25
+kvasir_seg,unet,single view,2_2,1,3,16
+kvasir_seg,unet,single view,3_0,0,1,47
+kvasir_seg,unet,single view,3_1,0,2,43
+kvasir_seg,unet,single view,3_2,1,2,35
+kvasir_seg,unet,single view,4_0,0,4,74
+kvasir_seg,unet,single view,4_1,1,4,41
+kvasir_seg,unet,single view,4_2,2,4,31
+kvasir_seg,unet,TTA-8,0_0,0,2,63
+kvasir_seg,unet,TTA-8,0_1,0,2,31
+kvasir_seg,unet,TTA-8,0_2,3,9,54
+kvasir_seg,unet,TTA-8,1_0,0,0,18
+kvasir_seg,unet,TTA-8,1_1,1,3,14
+kvasir_seg,unet,TTA-8,1_2,1,2,13
+kvasir_seg,unet,TTA-8,2_0,2,2,65
+kvasir_seg,unet,TTA-8,2_1,7,9,26
+kvasir_seg,unet,TTA-8,2_2,0,2,17
+kvasir_seg,unet,TTA-8,3_0,0,2,44
+kvasir_seg,unet,TTA-8,3_1,0,1,38
+kvasir_seg,unet,TTA-8,3_2,1,3,30
+kvasir_seg,unet,TTA-8,4_0,0,1,56
+kvasir_seg,unet,TTA-8,4_1,1,4,38
+kvasir_seg,unet,TTA-8,4_2,3,6,34
+cvc_colondb,unet,single view,0_0,45,59,74
+cvc_colondb,unet,single view,0_1,52,68,79
+cvc_colondb,unet,single view,0_2,58,73,77
+cvc_colondb,unet,single view,1_0,43,58,70
+cvc_colondb,unet,single view,1_1,56,76,87
+cvc_colondb,unet,single view,1_2,36,56,66
+cvc_colondb,unet,single view,2_0,69,87,100
+cvc_colondb,unet,single view,2_1,79,87,97
+cvc_colondb,unet,single view,2_2,69,74,92
+cvc_colondb,unet,single view,3_0,39,56,72
+cvc_colondb,unet,single view,3_1,60,66,80
+cvc_colondb,unet,single view,3_2,77,88,101
+cvc_colondb,unet,single view,4_0,36,56,68
+cvc_colondb,unet,single view,4_1,50,60,70
+cvc_colondb,unet,single view,4_2,46,58,66
+cvc_colondb,unet,TTA-8,0_0,64,72,77
+cvc_colondb,unet,TTA-8,0_1,66,68,74
+cvc_colondb,unet,TTA-8,0_2,65,69,79
+cvc_colondb,unet,TTA-8,1_0,47,62,68
+cvc_colondb,unet,TTA-8,1_1,66,68,75
+cvc_colondb,unet,TTA-8,1_2,55,60,67
+cvc_colondb,unet,TTA-8,2_0,80,88,94
+cvc_colondb,unet,TTA-8,2_1,89,92,102
+cvc_colondb,unet,TTA-8,2_2,77,80,92
+cvc_colondb,unet,TTA-8,3_0,51,57,59
+cvc_colondb,unet,TTA-8,3_1,76,77,83
+cvc_colondb,unet,TTA-8,3_2,84,88,100
+cvc_colondb,unet,TTA-8,4_0,46,55,61
+cvc_colondb,unet,TTA-8,4_1,62,65,68
+cvc_colondb,unet,TTA-8,4_2,55,66,71
+etis_larib,unet,single view,0_0,16,44,79
+etis_larib,unet,single view,0_1,8,39,65
+etis_larib,unet,single view,0_2,21,44,65
+etis_larib,unet,single view,1_0,1,23,63
+etis_larib,unet,single view,1_1,9,28,47
+etis_larib,unet,single view,1_2,12,35,50
+etis_larib,unet,single view,2_0,3,20,70
+etis_larib,unet,single view,2_1,16,35,61
+etis_larib,unet,single view,2_2,12,27,31
+etis_larib,unet,single view,3_0,3,22,68
+etis_larib,unet,single view,3_1,12,37,75
+etis_larib,unet,single view,3_2,24,49,69
+etis_larib,unet,single view,4_0,11,22,60
+etis_larib,unet,single view,4_1,29,46,54
+etis_larib,unet,single view,4_2,19,45,61
+etis_larib,unet,TTA-8,0_0,13,30,62
+etis_larib,unet,TTA-8,0_1,11,28,56
+etis_larib,unet,TTA-8,0_2,37,46,58
+etis_larib,unet,TTA-8,1_0,9,27,52
+etis_larib,unet,TTA-8,1_1,15,27,34
+etis_larib,unet,TTA-8,1_2,19,30,37
+etis_larib,unet,TTA-8,2_0,9,22,56
+etis_larib,unet,TTA-8,2_1,15,34,38
+etis_larib,unet,TTA-8,2_2,13,26,29
+etis_larib,unet,TTA-8,3_0,5,24,66
+etis_larib,unet,TTA-8,3_1,27,36,60
+etis_larib,unet,TTA-8,3_2,42,50,62
+etis_larib,unet,TTA-8,4_0,14,22,47
+etis_larib,unet,TTA-8,4_1,36,45,49
+etis_larib,unet,TTA-8,4_2,32,45,57

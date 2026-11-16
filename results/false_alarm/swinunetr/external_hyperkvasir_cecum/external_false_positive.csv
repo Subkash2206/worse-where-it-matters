@@ -1,0 +1,5 @@
+scope,method,control,n_cases,n_videos,n_false_positive,false_positive_rate,ci_low,ci_high,unit,n,both_correct,correct_to_fp,fp_to_correct,both_fp,mcnemar_p,mcnemar_p_adjusted,transition_unit,pred_volume_mm3_mean,pred_volume_mm3_median,pred_volume_mm3_max,pred_volume_mm3_total
+external,baseline,baseline,1009,1009,1009,1.0,1.0,1.0,cluster_bootstrap_group,1009,,,,,,,case,,,,
+external,tta2,baseline,1009,1009,1009,1.0,1.0,1.0,cluster_bootstrap_group,1009,0.0,0.0,0.0,1009.0,1.0,1.0,case,,,,
+external,tta4,baseline,1009,1009,1009,1.0,1.0,1.0,cluster_bootstrap_group,1009,0.0,0.0,0.0,1009.0,1.0,1.0,case,,,,
+external,tta8,baseline,1009,1009,1009,1.0,1.0,1.0,cluster_bootstrap_group,1009,0.0,0.0,0.0,1009.0,1.0,1.0,case,,,,
