@@ -34,7 +34,7 @@ OUT = RES / "paper_checks"
 K = 8
 DATASETS = ("kvasir_seg", "cvc_colondb", "etis_larib")
 CRITERIA = {"no_overlap": 0.0, "iou_below_010": 0.10, "iou_below_025": 0.25}
-RULES = ["tta8_anyview", "tta8_lowdet_20", "tta8_lowdet_40"]
+RULES = ["tta8_anyview", "tta8_lowdet_20", "tta8_lowdet_30", "tta8_lowdet_40"]
 
 
 def directory(model: str, ds: str) -> str:

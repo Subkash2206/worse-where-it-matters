@@ -1,0 +1,55 @@
+% =====================================================================
+% MIDL 2027 full paper -- Clinical Translation & Validation track
+% Template: github.com/MIDL-Conference/MIDLLatexTemplate (midl.cls v1.5)
+%
+% MIDL 2027 review is SINGLE-BLIND (author instructions): authors are shown,
+% so no [anon] option. The author list must be final at full-paper submission.
+% For the camera-ready, use \documentclass[final]{midl}.
+% Do not change font size (text or tables), line spacing or margins.
+% Page limit (CT&V track): 14 pages excluding references,
+% acknowledgments and appendix. Everything after \clearpage below
+% does not count.
+% =====================================================================
+\documentclass{midl}
+
+% Loaded by midl/jmlr already: amsmath, amssymb, natbib, graphicx, url,
+% algorithm2e, hyperref, xcolor. Do NOT load: subcaption, cleveref,
+% times, acro, glossaries (the class refuses them).
+\usepackage{booktabs}
+\usepackage{multirow}
+
+\jmlrvolume{-- Under Review}
+\jmlryear{2027}
+\jmlrworkshop{Full Paper -- MIDL 2027 submission}
+\editors{Under Review for MIDL 2027}
+
+\title[Reliability audit of geometric TTA]{How Misses Are Counted Decides Whether\\ Test-Time Augmentation Looks Harmful:\\ A Reliability Audit in Polyp Segmentation under Domain Shift}
+
+% Authors are visible to reviewers. The list is frozen at full-paper submission (4 Dec).
+\midlauthor{\Name{Subhash Kashyap\nametag{$^{1}$}} \Email{124CS0013@nitrkl.ac.in}\\
+\addr $^{1}$ National Institute of Technology Rourkela, India
+\AND
+\Name{Vipin V. Lokesh\nametag{$^{2}$}} \Email{vipin.lokesh22@gmail.com}\\
+\addr $^{2}$ PES University, Bengaluru, India}
+
+\begin{document}
+
+\maketitle
+
+\input{sections/00_abstract}
+
+\input{sections/01_introduction}
+\input{sections/02_related_work}
+\input{sections/03_methods}
+\input{sections/04_results}
+\input{sections/05_discussion}
+\input{sections/06_conclusion}
+
+\clearpage % references and appendix do not count
+
+\bibliography{refs}
+
+\appendix
+\input{sections/appendix}
+
+\end{document}
